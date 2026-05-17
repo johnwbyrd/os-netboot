@@ -122,6 +122,17 @@ function netboot_configure_do($verbose = false)
         return;
     }
 
+    // Runtime preconditions (service user, content root, support dirs).
+    // Single implementation in scripts/netboot/setup.sh; called via configctl
+    // from both here (boot) and the reconfigure controller (GUI save).
+    // The OPNsense convention is to defer this to runtime rather than to
+    // pkg lifecycle scripts -- no plugin in opnsense/plugins uses a
+    // +POST_INSTALL for user creation.
+    mwexec('/usr/local/sbin/configctl netboot setup');
+
+    // Render daemon configs from the model via the OPNsense template engine.
+    mwexec('/usr/local/sbin/configctl template reload OPNsense/Netboot');
+
     service_log('Starting netboot services...', $verbose);
     mwexec('/usr/local/sbin/configctl netboot start_tftpd');
     mwexec('/usr/local/sbin/configctl netboot start_http');
