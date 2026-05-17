@@ -35,11 +35,18 @@ command_args="-f ${confile}"
 netboot_sftp_precmd()
 {
     if [ ! -r "${confile}" ]; then
-        warn "${confile} not found; refusing to start (run 'configctl template reload OPNsense/Netboot' first)"
+        warn "netboot_sftp: cannot start: rendered sshd config not readable at ${confile}."
+        warn "  Expected: a Jinja2-rendered file produced by 'configctl template reload OPNsense/Netboot',"
+        warn "  triggered automatically when Netboot settings are saved (and SFTP is enabled)."
+        warn "  Fix: open Services -> Netboot -> General, enable SFTP ingress, and click Save, OR run"
+        warn "  'configctl netboot setup && configctl template reload OPNsense/Netboot' at the shell."
         return 1
     fi
     if [ ! -x "${program}" ]; then
-        warn "${program} not found; sshd is part of OPNsense base -- something is wrong"
+        warn "netboot_sftp: cannot start: sshd binary not present or not executable at ${program}."
+        warn "  Expected: /usr/sbin/sshd, which is part of FreeBSD base (and OPNsense ships it for"
+        warn "  the management SSH server). Its absence means the base install is damaged."
+        warn "  Fix: reinstall the FreeBSD base 'ssh' set, or repair the OPNsense installation."
         return 1
     fi
 

@@ -74,7 +74,13 @@ class ServiceController extends ApiMutableServiceControllerBase
     public function reconfigureAction()
     {
         if (!$this->request->isPost()) {
-            return ['status' => 'failed', 'message' => gettext('Use POST.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('The "reconfigure" action requires POST. Received %s. Reconfigure mutates daemon state (runs setup, re-renders templates, restarts services) and is intentionally not exposed as GET. Have the GUI call $.post(...) or use -X POST with curl.'),
+                    $this->request->getMethod()
+                ),
+            ];
         }
 
         $backend = new Backend();
@@ -114,7 +120,13 @@ class ServiceController extends ApiMutableServiceControllerBase
     public function bootstrapNetbootXyzAction()
     {
         if (!$this->request->isPost()) {
-            return ['status' => 'failed', 'message' => gettext('Use POST.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('The "bootstrap_netboot_xyz" action requires POST. Received %s. This action fetches files from the internet and writes them into the content root, so it is not exposed as a GET. Have the GUI call $.post(...) or use -X POST with curl.'),
+                    $this->request->getMethod()
+                ),
+            ];
         }
         $backend = new Backend();
         $output = $backend->configdRun('netboot bootstrap_netboot_xyz');

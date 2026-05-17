@@ -38,13 +38,23 @@ trap 'rm -rf "${TMP}"' EXIT INT TERM
 fetch_one()
 {
     name="$1"
-    echo "Fetching ${UPSTREAM}/${name}..."
-    if ! /usr/bin/fetch -q -o "${TMP}/${name}" "${UPSTREAM}/${name}"; then
-        echo "ERROR: failed to fetch ${UPSTREAM}/${name}" >&2
+    url="${UPSTREAM}/${name}"
+    echo "Fetching ${url} ..."
+    # Capture fetch's stderr so we can surface its specific error (timeout,
+    # 404, TLS failure, DNS, etc.) rather than just "failed to fetch".
+    fetch_err=$(/usr/bin/fetch -o "${TMP}/${name}" "${url}" 2>&1) || {
+        echo "ERROR: could not download ${url}" >&2
+        echo "       fetch(1) said: ${fetch_err}" >&2
+        echo "       Expected: an HTTPS connection to boot.netboot.xyz returning a 200 response." >&2
+        echo "       Likely causes: (a) the firewall has no WAN connectivity right now," >&2
+        echo "       (b) outbound HTTPS to boot.netboot.xyz is blocked by an egress rule," >&2
+        echo "       (c) DNS for boot.netboot.xyz is not resolving, or (d) netboot.xyz is" >&2
+        echo "       transiently down. Test from the OPNsense shell:" >&2
+        echo "         fetch -o /dev/null https://boot.netboot.xyz/ipxe/${name}" >&2
         return 1
-    fi
+    }
     # Atomic move so we don't leave a half-written file in the served tree
-    # if something interrupts us.
+    # if something interrupts us between download and finalize.
     /bin/mv -f "${TMP}/${name}" "${CONTENT_ROOT}/${name}"
     /usr/sbin/chown _netboot:_netboot "${CONTENT_ROOT}/${name}"
     /bin/chmod 0644 "${CONTENT_ROOT}/${name}"

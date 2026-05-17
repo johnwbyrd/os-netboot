@@ -18,12 +18,13 @@ rcvar="${name}_enable"
 desc="os-netboot TFTP daemon"
 
 pidfile="/var/run/${name}.pid"
-argsfile="/var/etc/netboot/tftpd-args"
+flagsfile="/var/etc/netboot/tftpd-flags"
 program="/usr/local/libexec/in.tftpd"
 
-# The daemon(8) wrapper handles backgrounding and pidfile management. We do
-# this rather than rely on each daemon's native daemonization because we want
-# uniform behavior across tftpd, darkhttpd, and our SFTP sshd.
+# The daemon(8) wrapper handles backgrounding and pidfile management uniformly
+# across our three rc.d scripts (tftpd, lighttpd, sshd). This keeps the
+# supervision model consistent regardless of whether the underlying daemon has
+# its own daemonization story.
 command="/usr/sbin/daemon"
 command_args="-c -f -p ${pidfile} -t ${desc}"
 
@@ -31,16 +32,25 @@ start_precmd="${name}_precmd"
 
 netboot_tftpd_precmd()
 {
-    if [ ! -r "${argsfile}" ]; then
-        warn "${argsfile} not found; refusing to start (templates not rendered yet?)"
+    if [ ! -r "${flagsfile}" ]; then
+        warn "netboot_tftpd: cannot start: rendered in.tftpd flags file not readable at ${flagsfile}."
+        warn "  Expected: a Jinja2-rendered file produced by 'configctl template reload OPNsense/Netboot',"
+        warn "  containing the CLI flags (e.g. '-L -s /var/netboot -u nobody'). The template engine"
+        warn "  writes this on every save of Services -> Netboot -> General."
+        warn "  Fix: open the Netboot settings page in the GUI and click Save, OR run"
+        warn "  'configctl netboot setup && configctl template reload OPNsense/Netboot' at the shell."
         return 1
     fi
     if [ ! -x "${program}" ]; then
-        warn "${program} not found; is the tftp-hpa package installed?"
+        warn "netboot_tftpd: cannot start: in.tftpd binary not present or not executable at ${program}."
+        warn "  Expected: /usr/local/libexec/in.tftpd, installed by the tftp-hpa package which"
+        warn "  os-netboot declares as a PLUGIN_DEPENDS. Its absence means the dependency wasn't"
+        warn "  installed, or has been removed."
+        warn "  Fix: 'pkg install -y tftp-hpa' or reinstall the os-netboot plugin."
         return 1
     fi
     # Append the actual program and its args to command_args.
-    command_args="${command_args} ${program} $(cat ${argsfile})"
+    command_args="${command_args} ${program} $(cat ${flagsfile})"
 }
 
 load_rc_config $name

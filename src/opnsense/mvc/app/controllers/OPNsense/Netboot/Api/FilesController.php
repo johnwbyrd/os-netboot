@@ -22,6 +22,11 @@ use OPNsense\Netboot\PathResolver;
  * relative to the configured content root, realpath() the result, and
  * REJECT anything that escapes the root. No '..' shenanigans, no
  * symlink-out, no absolute paths from the client.
+ *
+ * Error messages: every failure path includes (a) the specific value
+ * that was rejected and (b) what was expected. "Path not found" alone
+ * never appears -- the GUI surfaces these messages to the operator and
+ * a vague string forces them to guess.
  */
 class FilesController extends ApiControllerBase
 {
@@ -51,12 +56,64 @@ class FilesController extends ApiControllerBase
         return PathResolver::within($root, $relPath, $mustExist);
     }
 
+    /**
+     * Build a standard "method not allowed" failure. The Files API endpoints
+     * that mutate state require POST; GET is reserved for safe reads.
+     */
+    private function mustBePost(string $action): array
+    {
+        return [
+            'status'  => 'failed',
+            'message' => sprintf(
+                gettext('The "%s" action requires POST. Received %s. Have the GUI call $.post(...) or use -X POST with curl.'),
+                $action,
+                $this->request->getMethod()
+            ),
+        ];
+    }
+
+    /**
+     * Build a "content root missing or unconfigured" failure.
+     */
+    private function rootUnavailable(): array
+    {
+        $cfg = Config::getInstance()->object();
+        $configured = (string)($cfg->OPNsense->netboot->general->content_root ?? '/var/netboot');
+        return [
+            'status'  => 'failed',
+            'message' => sprintf(
+                gettext('The Netboot content root is not accessible. Configured value is "%s"; expected an existing absolute directory. Open Services -> Netboot -> General, set Content root to an existing path, and Save (which runs "configctl netboot setup" to create it if missing).'),
+                $configured
+            ),
+        ];
+    }
+
     public function listAction()
     {
         $rel = (string)$this->request->get('path', 'string', '');
+        if ($this->contentRoot() === '') {
+            return $this->rootUnavailable();
+        }
         $dir = $this->resolveWithin($rel, true);
-        if ($dir === '' || !is_dir($dir)) {
-            return ['status' => 'failed', 'message' => gettext('Path not found.')];
+        if ($dir === '') {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot list "%s": the path does not exist inside the content root, or it tries to escape the root via "..", an absolute path, or a symlink that resolves outside. Expected: a relative path that resolves to an existing directory under "%s".'),
+                    $rel,
+                    $this->contentRoot()
+                ),
+            ];
+        }
+        if (!is_dir($dir)) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot list "%s": the path resolves to "%s", which is not a directory. Expected: a directory. Use the download action on individual files.'),
+                    $rel,
+                    $dir
+                ),
+            ];
         }
 
         $entries = [];
@@ -86,26 +143,51 @@ class FilesController extends ApiControllerBase
     public function uploadAction()
     {
         if (!$this->request->isPost()) {
-            return ['status' => 'failed', 'message' => gettext('Use POST.')];
+            return $this->mustBePost('upload');
+        }
+        if ($this->contentRoot() === '') {
+            return $this->rootUnavailable();
         }
         $relDir = (string)$this->request->getPost('path', 'string', '');
         $destDir = $this->resolveWithin($relDir, true);
         if ($destDir === '' || !is_dir($destDir)) {
-            return ['status' => 'failed', 'message' => gettext('Destination directory not found.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot upload into "%s": the destination directory does not exist under the content root "%s", or the path escapes it. Expected: a relative directory that already exists. Use mkdir first if you need a new subdirectory.'),
+                    $relDir,
+                    $this->contentRoot()
+                ),
+            ];
         }
 
         $results = [];
         foreach ($this->request->getUploadedFiles() as $upload) {
-            $name = basename($upload->getName());
+            $original = $upload->getName();
+            $name = basename($original);
             if (!PathResolver::isSafeName($name)) {
-                $results[] = ['name' => $upload->getName(), 'status' => 'rejected'];
+                $results[] = [
+                    'name'    => $original,
+                    'status'  => 'rejected',
+                    'message' => sprintf(
+                        gettext('Filename "%s" is rejected. Expected: a non-empty name that does not start with a dot and contains no slashes, backslashes, or control characters. Rename and retry.'),
+                        $original
+                    ),
+                ];
                 continue;
             }
             $target = $destDir . '/' . $name;
-            // Atomic move: upload to tempfile beside target, fsync, rename.
             $tmp = $target . '.upload.' . bin2hex(random_bytes(4));
             if (!$upload->moveTo($tmp)) {
-                $results[] = ['name' => $name, 'status' => 'failed'];
+                $results[] = [
+                    'name'    => $name,
+                    'status'  => 'failed',
+                    'message' => sprintf(
+                        gettext('Failed to write uploaded content to staging path "%s". Expected: writable directory at "%s" owned by _netboot. Fix: re-save Netboot settings to run "configctl netboot setup", which resets the content-root ownership.'),
+                        $tmp,
+                        $destDir
+                    ),
+                ];
                 continue;
             }
             @chmod($tmp, 0644);
@@ -113,7 +195,15 @@ class FilesController extends ApiControllerBase
             @chgrp($tmp, '_netboot');
             if (!@rename($tmp, $target)) {
                 @unlink($tmp);
-                $results[] = ['name' => $name, 'status' => 'failed'];
+                $results[] = [
+                    'name'    => $name,
+                    'status'  => 'failed',
+                    'message' => sprintf(
+                        gettext('Wrote staging file "%s" but could not atomically rename to "%s". Expected: same-filesystem rename permission. Fix: ensure the content root is not a cross-mount symlink target.'),
+                        $tmp,
+                        $target
+                    ),
+                ];
                 continue;
             }
             $results[] = ['name' => $name, 'status' => 'ok', 'size' => filesize($target)];
@@ -125,28 +215,69 @@ class FilesController extends ApiControllerBase
     public function deleteAction()
     {
         if (!$this->request->isPost()) {
-            return ['status' => 'failed', 'message' => gettext('Use POST.')];
+            return $this->mustBePost('delete');
+        }
+        if ($this->contentRoot() === '') {
+            return $this->rootUnavailable();
         }
         $rel = (string)$this->request->getPost('path', 'string', '');
         if ($rel === '') {
-            return ['status' => 'failed', 'message' => gettext('Empty path.')];
+            return [
+                'status'  => 'failed',
+                'message' => gettext('Delete called with an empty path. Expected: a non-empty relative path to a file or empty subdirectory under the content root.'),
+            ];
         }
         $target = $this->resolveWithin($rel, true);
-        if ($target === '' || $target === $this->contentRoot()) {
-            return ['status' => 'failed', 'message' => gettext('Refusing to delete that target.')];
+        if ($target === '') {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot delete "%s": the path does not exist inside the content root, or it tries to escape via "..", an absolute path, or a symlink resolving outside.'),
+                    $rel
+                ),
+            ];
+        }
+        if ($target === $this->contentRoot()) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Refusing to delete the content root itself ("%s"). The root is created and owned by os-netboot; uninstall the plugin to remove it.'),
+                    $this->contentRoot()
+                ),
+            ];
         }
         if (is_dir($target)) {
-            // Only allow rmdir on empty directories from this endpoint.
-            // Recursive delete intentionally not exposed in v0.1.
             if (count(scandir($target)) !== 2) {
-                return ['status' => 'failed', 'message' => gettext('Directory not empty.')];
+                return [
+                    'status'  => 'failed',
+                    'message' => sprintf(
+                        gettext('Cannot delete "%s": directory is not empty. Expected: an empty directory (recursive delete is intentionally not exposed in v0.1; delete the contents first, then the directory).'),
+                        $rel
+                    ),
+                ];
             }
             if (!@rmdir($target)) {
-                return ['status' => 'failed', 'message' => gettext('Could not remove directory.')];
+                $err = error_get_last()['message'] ?? 'unknown';
+                return [
+                    'status'  => 'failed',
+                    'message' => sprintf(
+                        gettext('rmdir("%s") failed: %s. Expected: writable parent directory and removable empty target.'),
+                        $target,
+                        $err
+                    ),
+                ];
             }
         } else {
             if (!@unlink($target)) {
-                return ['status' => 'failed', 'message' => gettext('Could not remove file.')];
+                $err = error_get_last()['message'] ?? 'unknown';
+                return [
+                    'status'  => 'failed',
+                    'message' => sprintf(
+                        gettext('unlink("%s") failed: %s. Expected: writable parent directory.'),
+                        $target,
+                        $err
+                    ),
+                ];
             }
         }
         return ['status' => 'ok'];
@@ -155,21 +286,58 @@ class FilesController extends ApiControllerBase
     public function mkdirAction()
     {
         if (!$this->request->isPost()) {
-            return ['status' => 'failed', 'message' => gettext('Use POST.')];
+            return $this->mustBePost('mkdir');
+        }
+        if ($this->contentRoot() === '') {
+            return $this->rootUnavailable();
         }
         $rel = (string)$this->request->getPost('path', 'string', '');
-        if ($rel === '' || PathResolver::containsTraversal(ltrim($rel, '/'))) {
-            return ['status' => 'failed', 'message' => gettext('Invalid path.')];
+        if ($rel === '') {
+            return [
+                'status'  => 'failed',
+                'message' => gettext('mkdir called with an empty path. Expected: a non-empty relative path for the new directory under the content root.'),
+            ];
+        }
+        if (PathResolver::containsTraversal(ltrim($rel, '/'))) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('mkdir path "%s" contains a ".." segment. Expected: a relative path without traversal components.'),
+                    $rel
+                ),
+            ];
         }
         $target = $this->resolveWithin($rel, false);
         if ($target === '') {
-            return ['status' => 'failed', 'message' => gettext('Path escapes content root.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('mkdir path "%s" would create a directory outside the content root "%s". Expected: a relative path whose parent exists and stays inside the root.'),
+                    $rel,
+                    $this->contentRoot()
+                ),
+            ];
         }
         if (file_exists($target)) {
-            return ['status' => 'failed', 'message' => gettext('Already exists.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot create "%s": a file or directory already exists at that path (resolves to "%s"). Pick a different name or delete the existing entry first.'),
+                    $rel,
+                    $target
+                ),
+            ];
         }
         if (!@mkdir($target, 0755, true)) {
-            return ['status' => 'failed', 'message' => gettext('Could not create directory.')];
+            $err = error_get_last()['message'] ?? 'unknown';
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('mkdir("%s") failed: %s. Expected: writable parent directory owned by _netboot.'),
+                    $target,
+                    $err
+                ),
+            ];
         }
         @chown($target, '_netboot');
         @chgrp($target, '_netboot');
@@ -179,24 +347,52 @@ class FilesController extends ApiControllerBase
     public function fetchUrlAction()
     {
         if (!$this->request->isPost()) {
-            return ['status' => 'failed', 'message' => gettext('Use POST.')];
+            return $this->mustBePost('fetch_url');
+        }
+        if ($this->contentRoot() === '') {
+            return $this->rootUnavailable();
         }
         $url  = (string)$this->request->getPost('url', 'string', '');
         $name = (string)$this->request->getPost('name', 'string', '');
         $rel  = (string)$this->request->getPost('path', 'string', '');
 
-        if ($url === '' || !preg_match('#^https?://#', $url)) {
-            return ['status' => 'failed', 'message' => gettext('Only http(s) URLs accepted.')];
+        if ($url === '') {
+            return [
+                'status'  => 'failed',
+                'message' => gettext('fetch_url called with an empty URL. Expected: a non-empty http:// or https:// URL.'),
+            ];
+        }
+        if (!preg_match('#^https?://#', $url)) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('URL "%s" has an unsupported scheme. Expected: http:// or https://. Other protocols (ftp, file, ...) are intentionally not supported -- if you need them, mirror to an HTTP server first.'),
+                    $url
+                ),
+            ];
         }
         if ($name === '') {
             $name = basename(parse_url($url, PHP_URL_PATH) ?? 'download');
         }
         if (!PathResolver::isSafeName($name)) {
-            return ['status' => 'failed', 'message' => gettext('Invalid filename.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot save fetched URL under filename "%s". Expected: a non-empty name that does not start with a dot and contains no slashes, backslashes, or control characters. Use the "name" field to override the auto-derived filename.'),
+                    $name
+                ),
+            ];
         }
         $destDir = $this->resolveWithin($rel, true);
         if ($destDir === '' || !is_dir($destDir)) {
-            return ['status' => 'failed', 'message' => gettext('Destination directory not found.')];
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('fetch_url destination directory "%s" does not exist inside the content root "%s", or the path escapes it. Expected: a relative directory that already exists. Use mkdir first.'),
+                    $rel,
+                    $this->contentRoot()
+                ),
+            ];
         }
 
         $backend = new Backend();
@@ -207,10 +403,35 @@ class FilesController extends ApiControllerBase
 
     public function downloadAction()
     {
+        if ($this->contentRoot() === '') {
+            return $this->rootUnavailable();
+        }
         $rel = (string)$this->request->get('path', 'string', '');
+        if ($rel === '') {
+            return [
+                'status'  => 'failed',
+                'message' => gettext('Download called with an empty path. Expected: a relative path to a file under the content root.'),
+            ];
+        }
         $target = $this->resolveWithin($rel, true);
-        if ($target === '' || !is_file($target)) {
-            return ['status' => 'failed', 'message' => gettext('File not found.')];
+        if ($target === '') {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot download "%s": the path does not exist inside the content root, or it tries to escape via "..", an absolute path, or a symlink resolving outside.'),
+                    $rel
+                ),
+            ];
+        }
+        if (!is_file($target)) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Cannot download "%s": the path resolves to "%s", which is not a regular file. Expected: a regular file (not a directory or symlink to elsewhere). Use the list action to navigate directories.'),
+                    $rel,
+                    $target
+                ),
+            ];
         }
         $name = basename($target);
         $this->response->setHeader('Content-Type', 'application/octet-stream');

@@ -31,11 +31,18 @@ start_precmd="${name}_precmd"
 netboot_http_precmd()
 {
     if [ ! -r "${confile}" ]; then
-        warn "${confile} not found; refusing to start (run 'configctl template reload OPNsense/Netboot' first)"
+        warn "netboot_http: cannot start: rendered lighttpd config not readable at ${confile}."
+        warn "  Expected: a Jinja2-rendered file produced by 'configctl template reload OPNsense/Netboot',"
+        warn "  triggered automatically when the Netboot settings page is saved."
+        warn "  Fix: open Services -> Netboot -> General in the GUI and click Save, OR run"
+        warn "  'configctl netboot setup && configctl template reload OPNsense/Netboot' at the shell."
         return 1
     fi
     if [ ! -x "${program}" ]; then
-        warn "${program} not found; OPNsense ships lighttpd in base -- something is wrong"
+        warn "netboot_http: cannot start: lighttpd binary not present or not executable at ${program}."
+        warn "  Expected: /usr/local/sbin/lighttpd, which is part of the OPNsense base install (used by"
+        warn "  the management webGUI itself). Its absence means the base install is damaged."
+        warn "  Fix: 'pkg install -f lighttpd' or repair the OPNsense installation."
         return 1
     fi
 }
