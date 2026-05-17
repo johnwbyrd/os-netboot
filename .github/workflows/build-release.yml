@@ -154,19 +154,25 @@ jobs:
             else
                 # An unsigned catalog is published as broken (clients with
                 # signature_type: pubkey in their .conf -- which is what we
-                # ship -- reject it at install time with 'No signature
-                # found in the repository'). So this is a hard failure, not
-                # a warning. Likely cause: PKG_SIGNING_KEY secret missing
-                # from the repo, OR the env: block on the freebsd-vm step
-                # is missing/typoed so the value didn't make it into the VM.
-                echo "ERROR: PKG_SIGNING_KEY is empty inside the FreeBSD VM."
-                echo "       Expected: the secret PKG_SIGNING_KEY populated at"
-                echo "       github.com/johnwbyrd/os-netboot/settings/secrets/actions,"
-                echo "       AND a step-level env: block in build-release.yml mapping"
-                echo "       PKG_SIGNING_KEY: \${{ secrets.PKG_SIGNING_KEY }} so the"
-                echo "       runner has it before vmactions/freebsd-vm forwards it."
-                echo "       Fix: re-set the secret with gh secret set PKG_SIGNING_KEY"
-                echo "       and verify the env: block above is intact."
+                # ship -- reject it at install time with "No signature
+                # found in the repository"). So this is a hard failure,
+                # not a warning. Likely causes: the secret is not set on
+                # the repo, OR the env: block on the FreeBSD VM step is
+                # missing so the value never reached the runner before
+                # the action tried to forward it into the VM.
+                #
+                # NOTE: deliberately not echoing the secret name in a
+                # form that GitHub Actions might template-expand. See
+                # the file at .github/workflows/build-release.yml; do
+                # NOT add the secret expression as a string literal in
+                # any echo, or GHA expands it at YAML parse time and
+                # bakes the cleartext value into the script.
+                echo "ERROR: signing key env var is empty inside the FreeBSD VM."
+                echo "       Expected: a non-empty value forwarded from the runner."
+                echo "       Check the repo secret at"
+                echo "         github.com/johnwbyrd/os-netboot/settings/secrets/actions"
+                echo "       and the env: + envs: lines on the FreeBSD VM step in"
+                echo "       .github/workflows/build-release.yml."
                 exit 1
             fi
 
