@@ -22,8 +22,9 @@ properly, and after install everything happens in the web GUI.
 | TFTP                          | `in.tftpd` from tftp-hpa, IPv4+IPv6, secure mode (chroot), starts at boot                                                     |
 | HTTP                          | Dedicated `lighttpd` instance on a configurable port (default 8069)                                                           |
 | SFTP ingress (optional)       | Dedicated `sshd` instance, SFTP-only, chrooted, key-based auth, separate from your management SSH                             |
+| BIOS + UEFI out of the box    | One-click "Bootstrap netboot.xyz" fetches both `netboot.xyz.kpxe` (legacy BIOS) and `netboot.xyz.efi` (UEFI x86_64) into the content root. You don't pick one. |
 | File management — web GUI     | Browse / upload (drag-drop) / download / delete / **fetch-from-URL** (paste a link, firewall pulls the file server-side)      |
-| DHCP boot wiring helper       | One-click populates BIOS and UEFI boot entries in Dnsmasq, with arch-aware tags, pointing at the Netboot listen address       |
+| DHCP boot wiring helper       | One-click populates **both** BIOS and UEFI x86_64 boot entries in Dnsmasq, with arch-aware tags (DHCP option 93), pointing at the Netboot listen address       |
 | Firewall integration          | Pass rules for TFTP/HTTP/SFTP on the chosen listen interfaces are added automatically                                         |
 | Boot lifecycle                | `_configure()` `bootup` hook — actually starts at boot (the os-tftp bug that started this project)                            |
 | HA                            | `_xmlrpc_sync()` for replicating settings to the secondary firewall                                                           |
@@ -86,13 +87,19 @@ Netboot page confirm.
 
 ### Step 4.  Put files in (all GUI)
 
-**Services → Netboot → Files**.  Two paths:
+**Services → Netboot → Files**.  Three paths:
 
+- **Bootstrap netboot.xyz** (one click).  Fetches both the legacy-BIOS iPXE
+  binary (`netboot.xyz.kpxe`) **and** the UEFI x86_64 iPXE binary
+  (`netboot.xyz.efi`) from `boot.netboot.xyz` into the content root.  This
+  is what you want for the common case — your fleet has a mix of BIOS and
+  UEFI machines, and you want every one of them to be able to PXE-boot the
+  netboot.xyz menu without further configuration.  After clicking this
+  once, both boot types work; you don't pick one.
 - **Drag-and-drop upload.**
-- **Fetch from URL.**  Paste a link — for example
-  `https://boot.netboot.xyz/ipxe/netboot.xyz.kpxe` for the legacy BIOS
-  iPXE bootstrap, or `https://boot.netboot.xyz/ipxe/netboot.xyz.efi` for
-  UEFI x86_64.  The firewall pulls it server-side.
+- **Fetch from URL.**  Paste a link, the firewall pulls it server-side.
+  Useful for things outside the netboot.xyz tree (custom iPXE menus,
+  rescue images, Clonezilla, memtest, etc.)
 
 ### Step 5 (optional).  Auto-wire Dnsmasq DHCP boot entries
 
