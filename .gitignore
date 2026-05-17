@@ -2,3 +2,6 @@ work/
 *.txz
 *.swp
 .DS_Store
+# Local OPNsense core checkout used for research/grepping during development.
+# Never committed -- big and unrelated.
+.research/

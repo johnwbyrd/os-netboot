@@ -1,0 +1,68 @@
+#!/bin/sh
+#
+# PROVIDE: netboot_sftp
+# REQUIRE: NETWORKING FILESYSTEMS
+# KEYWORD: shutdown
+#
+# Custom rc.d wrapper for the os-netboot SFTP daemon: a dedicated sshd
+# instance, separate from OPNsense's management sshd, in SFTP-only mode
+# via ForceCommand internal-sftp + ChrootDirectory.
+#
+# Host keys are generated on first start into /var/db/netboot/ssh_host_*_key
+# if missing. Authorized keys are templated from the model into
+# /var/db/netboot/authorized_keys.
+#
+
+. /etc/rc.subr
+
+name="netboot_sftp"
+rcvar="${name}_enable"
+desc="os-netboot SFTP server"
+
+pidfile="/var/run/${name}.pid"
+confile="/var/etc/netboot/sshd-netboot.conf"
+program="/usr/sbin/sshd"
+keydir="/var/db/netboot"
+
+start_precmd="${name}_precmd"
+
+# sshd daemonizes itself by default and writes its own pidfile when given
+# -o "PidFile=...". We don't wrap with daemon(8) here because sshd's pidfile
+# semantics interact poorly with double-daemonization.
+command="${program}"
+command_args="-f ${confile}"
+
+netboot_sftp_precmd()
+{
+    if [ ! -r "${confile}" ]; then
+        warn "${confile} not found; refusing to start (run 'configctl template reload OPNsense/Netboot' first)"
+        return 1
+    fi
+    if [ ! -x "${program}" ]; then
+        warn "${program} not found; sshd is part of OPNsense base -- something is wrong"
+        return 1
+    fi
+
+    # Ensure key directory exists with safe perms.
+    if [ ! -d "${keydir}" ]; then
+        install -d -o root -g wheel -m 0700 "${keydir}"
+    fi
+
+    # Generate host keys on first start.
+    if [ ! -f "${keydir}/ssh_host_ed25519_key" ]; then
+        /usr/bin/ssh-keygen -q -t ed25519 -N "" -f "${keydir}/ssh_host_ed25519_key"
+    fi
+    if [ ! -f "${keydir}/ssh_host_rsa_key" ]; then
+        /usr/bin/ssh-keygen -q -t rsa -b 4096 -N "" -f "${keydir}/ssh_host_rsa_key"
+    fi
+
+    # authorized_keys must exist (empty is fine; sshd just won't authorize anyone).
+    if [ ! -f "${keydir}/authorized_keys" ]; then
+        install -o root -g wheel -m 0644 /dev/null "${keydir}/authorized_keys"
+    fi
+}
+
+load_rc_config $name
+: ${netboot_sftp_enable:="YES"}
+
+run_rc_command "$1"

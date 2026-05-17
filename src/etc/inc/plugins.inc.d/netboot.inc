@@ -155,54 +155,45 @@ function netboot_firewall(\OPNsense\Firewall\Plugin $fw)
 
     $http_port = (int)($general['http_port'] ?? 8069);
     $sftp_port = (int)($config['OPNsense']['netboot']['sftp']['port'] ?? 2069);
+    $log_default = !isset($config['syslog']['nologdefaultpass']);
 
+    // Mirror the pattern used by core's dnsmasq.inc / kea.inc: a per-interface
+    // shared base rule, with per-port specifics layered on top. Priority `1`
+    // matches the convention these plugins use; the docs example shows 500000
+    // but real plugins go low.
     foreach ($interfaces as $if) {
         $if = trim($if);
         if ($if === '') {
             continue;
         }
 
-        // TFTP: UDP/69
-        $fw->registerFilterRule(
-            500000,
-            [
-                'direction' => 'in',
-                'interface' => $if,
-                'ipprotocol' => 'inet',
-                'protocol' => 'udp',
-                'to' => '(self)',
-                'to_port' => 69,
-                'descr' => 'os-netboot: TFTP (UDP/69)',
-            ]
-        );
+        $base = [
+            'interface' => $if,
+            'ipprotocol' => 'inet',
+            'log' => $log_default,
+            '#ref' => 'ui/netboot/general',
+            'direction' => 'in',
+            'to' => '(self)',
+        ];
 
-        // HTTP
-        $fw->registerFilterRule(
-            500001,
-            [
-                'direction' => 'in',
-                'interface' => $if,
-                'ipprotocol' => 'inet',
-                'protocol' => 'tcp',
-                'to' => '(self)',
-                'to_port' => $http_port,
-                'descr' => sprintf('os-netboot: HTTP (TCP/%d)', $http_port),
-            ]
-        );
+        $fw->registerFilterRule(1, array_merge($base, [
+            'protocol' => 'udp',
+            'to_port' => 69,
+            'descr' => 'os-netboot: allow access to TFTP server',
+        ]));
+
+        $fw->registerFilterRule(1, array_merge($base, [
+            'protocol' => 'tcp',
+            'to_port' => $http_port,
+            'descr' => sprintf('os-netboot: allow access to HTTP server (port %d)', $http_port),
+        ]));
 
         if (netboot_sftp_enabled()) {
-            $fw->registerFilterRule(
-                500002,
-                [
-                    'direction' => 'in',
-                    'interface' => $if,
-                    'ipprotocol' => 'inet',
-                    'protocol' => 'tcp',
-                    'to' => '(self)',
-                    'to_port' => $sftp_port,
-                    'descr' => sprintf('os-netboot: SFTP (TCP/%d)', $sftp_port),
-                ]
-            );
+            $fw->registerFilterRule(1, array_merge($base, [
+                'protocol' => 'tcp',
+                'to_port' => $sftp_port,
+                'descr' => sprintf('os-netboot: allow access to SFTP server (port %d)', $sftp_port),
+            ]));
         }
     }
 }

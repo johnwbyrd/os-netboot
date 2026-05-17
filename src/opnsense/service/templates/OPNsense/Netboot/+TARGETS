@@ -1,0 +1,3 @@
+tftpd-flags:/var/etc/netboot/tftpd-flags
+lighttpd-netboot.conf:/var/etc/netboot/lighttpd-netboot.conf
+sshd-netboot.conf:/var/etc/netboot/sshd-netboot.conf

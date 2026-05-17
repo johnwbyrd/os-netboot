@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# PROVIDE: netboot_http
+# REQUIRE: NETWORKING FILESYSTEMS
+# KEYWORD: shutdown
+#
+# Custom rc.d wrapper for the os-netboot HTTP daemon (a dedicated lighttpd
+# instance, separate from the OPNsense management webGUI's lighttpd).
+# Reads its config from a Jinja2-templated file rendered by the OPNsense
+# template engine (`configctl template reload OPNsense/Netboot`).
+#
+
+. /etc/rc.subr
+
+name="netboot_http"
+rcvar="${name}_enable"
+desc="os-netboot HTTP server (lighttpd)"
+
+pidfile="/var/run/${name}.pid"
+confile="/var/etc/netboot/lighttpd-netboot.conf"
+program="/usr/local/sbin/lighttpd"
+
+# daemon(8) handles backgrounding + pidfile mgmt uniformly across our three
+# rc.d scripts. lighttpd's own -D flag keeps it in the foreground so daemon(8)
+# can supervise it.
+command="/usr/sbin/daemon"
+command_args="-c -f -p ${pidfile} -t ${desc} ${program} -D -f ${confile}"
+
+start_precmd="${name}_precmd"
+
+netboot_http_precmd()
+{
+    if [ ! -r "${confile}" ]; then
+        warn "${confile} not found; refusing to start (run 'configctl template reload OPNsense/Netboot' first)"
+        return 1
+    fi
+    if [ ! -x "${program}" ]; then
+        warn "${program} not found; OPNsense ships lighttpd in base -- something is wrong"
+        return 1
+    fi
+}
+
+load_rc_config $name
+: ${netboot_http_enable:="YES"}
+
+run_rc_command "$1"

@@ -1,0 +1,13 @@
+{#-
+  Flags passed to /usr/local/libexec/in.tftpd. Sourced by the netboot_tftpd
+  rc.d wrapper. Runs in secure mode (chroot to content root), as user nobody,
+  with IPv4+IPv6 listen on UDP/69.
+
+  in.tftpd flags reference:
+    -L     stay in foreground (we use this because daemon(8) supervises us)
+    -s DIR chroot to DIR (secure mode)
+    -u USR drop privileges to USR
+    -p     permit only IPv4 (we omit this; we want dual-stack)
+    -a A:P bind to specific address:port (we omit; bind to all, gate via firewall)
+-#}
+-L -s {{ OPNsense.netboot.general.content_root | default('/var/netboot') }} -u nobody
