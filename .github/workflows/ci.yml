@@ -15,6 +15,12 @@ on:
 permissions:
   contents: read
 
+# Opt the @v4 JS actions (actions/checkout, etc.) onto Node.js 24 now,
+# ahead of the June 2, 2026 mandatory cutover. See build-release.yml for
+# the same flag and the rationale.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   lint:
     name: Lint (PHP / XML / shell)

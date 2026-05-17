@@ -13,6 +13,14 @@ on:
 permissions:
   contents: write
 
+# Opt the @v4 JS actions (actions/checkout, actions/upload-artifact,
+# peaceiris/actions-gh-pages) onto Node.js 24 now, ahead of the June 2,
+# 2026 mandatory cutover. The runner emits a deprecation warning for any
+# action that ships with a Node 20 runtime; this env var flips them over.
+# Catches forward-compat issues while we still have time to react.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build:
     name: Build, sign, and publish OPNsense plugin pkg
