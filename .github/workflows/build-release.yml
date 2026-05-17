@@ -119,15 +119,20 @@ jobs:
                 chmod 600 "${KEYFILE}"
                 printf '%s\n' "${PKG_SIGNING_KEY}" > "${KEYFILE}"
 
-                # pkg-repo(8) takes ONE --signing-command argument: the full
-                # shell command to run. pkg pipes the SHA256 of the catalog
-                # to that command's stdin and expects the binary signature
-                # on stdout. openssl dgst -sha256 -sign <key> does exactly
-                # that. (Earlier we passed 'signing_command:' colon-style
-                # extra args, which pkg silently ignored, producing an
-                # UNSIGNED catalog that the client correctly rejected at
-                # install time.)
-                pkg repo --signing-command "openssl dgst -sha256 -sign ${KEYFILE}" "${REPODIR_ABI}"
+                # FreeBSD's pkg-repo(8) uses positional 'signing_command:'
+                # syntax for the catalog-signing command:
+                #   pkg repo <repo-path> signing_command: <the command>
+                # The literal 'signing_command:' is a sentinel; every arg
+                # after it is the command. pkg pipes the SHA256 of the
+                # catalog to that command's stdin and saves stdout as the
+                # .sig alongside the catalog file. openssl dgst -sha256
+                # -sign <key> reads stdin and writes a binary signature
+                # to stdout, which is exactly what pkg wants.
+                #
+                # (The long-option '--signing-command "..."' form is from
+                # GNU-style tools; FreeBSD's pkg does not accept it and
+                # errors with 'unrecognized option' if you try.)
+                pkg repo "${REPODIR_ABI}" signing_command: openssl dgst -sha256 -sign "${KEYFILE}"
 
                 rm -f "${KEYFILE}"
 
