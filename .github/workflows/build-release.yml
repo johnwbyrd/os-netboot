@@ -58,6 +58,12 @@ jobs:
 
       - name: Lint, test, and build the .pkg inside a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
+        # Make the signing secret available to THIS STEP as an env var.
+        # The 'envs:' field below tells vmactions/freebsd-vm to forward
+        # variables INTO the VM, but only if they already exist on the
+        # runner -- so we must materialize it from secrets here first.
+        env:
+          PKG_SIGNING_KEY: ${{ secrets.PKG_SIGNING_KEY }}
         with:
           release: "14.2"
           usesh: true
@@ -141,8 +147,22 @@ jobs:
                     exit 1
                 fi
             else
-                echo "::warning::PKG_SIGNING_KEY not set -- producing unsigned catalog (clients must configure signature_type: none)"
-                pkg repo "${REPODIR_ABI}"
+                # An unsigned catalog is published as broken (clients with
+                # signature_type: pubkey in their .conf -- which is what we
+                # ship -- reject it at install time with 'No signature
+                # found in the repository'). So this is a hard failure, not
+                # a warning. Likely cause: PKG_SIGNING_KEY secret missing
+                # from the repo, OR the env: block on the freebsd-vm step
+                # is missing/typoed so the value didn't make it into the VM.
+                echo "ERROR: PKG_SIGNING_KEY is empty inside the FreeBSD VM."
+                echo "       Expected: the secret PKG_SIGNING_KEY populated at"
+                echo "       github.com/johnwbyrd/os-netboot/settings/secrets/actions,"
+                echo "       AND a step-level env: block in build-release.yml mapping"
+                echo "       PKG_SIGNING_KEY: \${{ secrets.PKG_SIGNING_KEY }} so the"
+                echo "       runner has it before vmactions/freebsd-vm forwards it."
+                echo "       Fix: re-set the secret with gh secret set PKG_SIGNING_KEY"
+                echo "       and verify the env: block above is intact."
+                exit 1
             fi
 
             ls -la "${REPODIR_ABI}"
