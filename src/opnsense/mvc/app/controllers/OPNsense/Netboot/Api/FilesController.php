@@ -5,6 +5,7 @@ namespace OPNsense\Netboot\Api;
 use OPNsense\Base\ApiControllerBase;
 use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
+use OPNsense\Netboot\PathResolver;
 
 /**
  * File management endpoints over the Netboot content root.
@@ -37,12 +38,9 @@ class FilesController extends ApiControllerBase
 
     /**
      * Resolve a user-supplied relative path within the content root.
-     * Returns '' if the path escapes the root or doesn't exist (for read ops)
-     * or returns the absolute path within the root (for any op).
-     *
-     * @param string $relPath           untrusted, from the request
-     * @param bool   $mustExist         if true, '' on missing target
-     * @return string                   '' on rejection, else absolute path
+     * Thin wrapper around OPNsense\Netboot\PathResolver::within so the
+     * security-critical logic lives in a separately unit-testable class
+     * (see tests/PathResolverTest.php).
      */
     private function resolveWithin(string $relPath, bool $mustExist = true): string
     {
@@ -50,32 +48,7 @@ class FilesController extends ApiControllerBase
         if ($root === '') {
             return '';
         }
-        // Strip any leading slash so we always concatenate as relative.
-        $relPath = ltrim($relPath, '/');
-        // Reject obvious traversal early.
-        if (strpos($relPath, '..') !== false) {
-            return '';
-        }
-        $candidate = $root . '/' . $relPath;
-        if ($mustExist) {
-            $real = realpath($candidate);
-            if ($real === false) {
-                return '';
-            }
-        } else {
-            // For destinations that don't exist yet (upload, mkdir), canonicalize
-            // the parent and append the base name.
-            $parent = realpath(dirname($candidate));
-            if ($parent === false) {
-                return '';
-            }
-            $real = $parent . '/' . basename($candidate);
-        }
-        // Final containment check: must be exactly root or a descendant of root.
-        if ($real !== $root && strpos($real, $root . '/') !== 0) {
-            return '';
-        }
-        return $real;
+        return PathResolver::within($root, $relPath, $mustExist);
     }
 
     public function listAction()
@@ -124,10 +97,7 @@ class FilesController extends ApiControllerBase
         $results = [];
         foreach ($this->request->getUploadedFiles() as $upload) {
             $name = basename($upload->getName());
-            // Reject hidden files and anything with shell-y characters in the
-            // name; users can rename via SFTP if they have to do something
-            // weird.
-            if ($name === '' || $name[0] === '.' || preg_match('/[\\\\\/\x00-\x1f]/', $name)) {
+            if (!PathResolver::isSafeName($name)) {
                 $results[] = ['name' => $upload->getName(), 'status' => 'rejected'];
                 continue;
             }
@@ -188,7 +158,7 @@ class FilesController extends ApiControllerBase
             return ['status' => 'failed', 'message' => gettext('Use POST.')];
         }
         $rel = (string)$this->request->getPost('path', 'string', '');
-        if ($rel === '' || strpos($rel, '..') !== false) {
+        if ($rel === '' || PathResolver::containsTraversal(ltrim($rel, '/'))) {
             return ['status' => 'failed', 'message' => gettext('Invalid path.')];
         }
         $target = $this->resolveWithin($rel, false);
@@ -221,7 +191,7 @@ class FilesController extends ApiControllerBase
         if ($name === '') {
             $name = basename(parse_url($url, PHP_URL_PATH) ?? 'download');
         }
-        if ($name === '' || $name[0] === '.' || preg_match('/[\\\\\/\x00-\x1f]/', $name)) {
+        if (!PathResolver::isSafeName($name)) {
             return ['status' => 'failed', 'message' => gettext('Invalid filename.')];
         }
         $destDir = $this->resolveWithin($rel, true);

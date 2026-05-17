@@ -1,0 +1,106 @@
+name: ci
+
+# Fast feedback on every push and PR. The heavy stuff (FreeBSD VM build, pkg
+# repo publish, GitHub Pages deploy) lives in build-release.yml and runs on
+# main + tags. This workflow runs cheap Linux-side checks that catch most
+# bugs before the slow build is even queued.
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']  # tag pushes go to build-release.yml exclusively
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (PHP / XML / shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lint tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              php-cli libxml2-utils shellcheck
+          php -v
+
+      - name: php -l (syntax check every PHP file)
+        run: |
+          set -eux
+          # parallel-lint isn't in apt; emulate it.
+          fail=0
+          while IFS= read -r f; do
+              if ! php -l "$f" > /dev/null; then
+                  fail=1
+              fi
+          done < <(find src -name '*.php' -type f)
+          exit $fail
+
+      - name: xmllint --noout (well-formed XML)
+        run: |
+          set -eux
+          find src -name '*.xml*' -type f -print0 \
+              | xargs -0 -n1 xmllint --noout
+
+      - name: sh -n (parse every shell script)
+        run: |
+          set -eux
+          while IFS= read -r f; do
+              if ! head -n1 "$f" | grep -q '^#!/'; then
+                  echo "Missing shebang in $f" >&2
+                  exit 1
+              fi
+              if ! sh -n "$f"; then
+                  exit 1
+              fi
+          done < <(find src -name '*.sh' -type f)
+
+      - name: shellcheck (advisory, won't fail the build)
+        run: |
+          set -eux
+          find src -name '*.sh' -type f -print0 \
+              | xargs -0 -r shellcheck -s sh -S warning || true
+
+      - name: rc.d scripts and helper scripts must be executable
+        run: |
+          set -eux
+          fail=0
+          for d in src/etc/rc.d src/opnsense/scripts; do
+              [ -d "$d" ] || continue
+              while IFS= read -r f; do
+                  case "$f" in
+                      *.xml|*.csv|*.sql) continue ;;
+                  esac
+                  if [ ! -x "$f" ]; then
+                      echo "Missing executable permission: $f" >&2
+                      fail=1
+                  fi
+              done < <(find "$d" -type f)
+          done
+          exit $fail
+
+  phpunit:
+    name: PHPUnit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PHP + PHPUnit
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends php-cli php-xml
+          # PHPUnit 9 is the last version compatible with PHP 7.4/8.x that
+          # OPNsense itself uses. Grab the PHAR directly -- no Composer dance.
+          curl -fsSLo /tmp/phpunit https://phar.phpunit.de/phpunit-9.phar
+          chmod +x /tmp/phpunit
+          /tmp/phpunit --version
+
+      - name: Run unit tests
+        run: /tmp/phpunit -c tests/phpunit.xml
