@@ -62,11 +62,10 @@ jobs:
           release: "14.2"
           usesh: true
           prepare: |
-            # phpunit needs the php-pkg + php-xml + php-tokenizer extensions
-            # for the parallel-lint and our tests; bsdmake comes with base.
+            # bsdmake comes with FreeBSD base. The php83 port installs the
+            # binary directly as /usr/local/bin/php; no aliasing needed.
+            # tokenizer/xml/dom are required by parallel-lint and PHPUnit.
             pkg install -y git php83 php83-tokenizer php83-xml php83-dom
-            # parallel-lint shells out to `php` -- make sure it's on PATH.
-            ln -sf /usr/local/bin/php83 /usr/local/bin/php || true
             php -v
           envs: 'PKG_SIGNING_KEY'
           run: |
