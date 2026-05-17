@@ -32,6 +32,19 @@ jobs:
           path: opnsense-plugins
           ref: master
 
+      - name: Check out opnsense/core as a sibling (needed by make lint)
+        # The plugin's Mk/lint.mk pulls in core/Mk/lint.mk via:
+        #   .-include "${PLUGINSDIR}/../core/Mk/lint.mk"
+        # Several lint targets (lint-class, lint-import, lint-acl, lint-php
+        # via parallel-lint) reference scripts under opnsense/core. Without
+        # a sibling core checkout these targets soft-disable and the strict
+        # OPNsense conventions go unenforced.
+        uses: actions/checkout@v4
+        with:
+          repository: opnsense/core
+          path: core
+          ref: master
+
       - name: Inject this plugin into the opnsense/plugins tree
         run: |
           set -eux
@@ -43,24 +56,41 @@ jobs:
               --exclude='.research' \
               -cf - . | tar -C opnsense-plugins/ftp/netboot -xf -
 
-      - name: Build the .pkg inside a FreeBSD VM
+      - name: Lint, test, and build the .pkg inside a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:
           release: "14.2"
           usesh: true
           prepare: |
-            pkg install -y git
-          # The VM mounts $GITHUB_WORKSPACE at /home/runner/work/<repo>/<repo>.
-          # We build the .pkg, then run `pkg repo` to generate the catalog
-          # (packagesite.pkg + meta.conf). Signing is done with an inline
-          # PEM key passed via env -- pkg-repo(8) supports `--signing-command`.
-          # If PKG_SIGNING_KEY is unset (e.g. PR builds from forks), we skip
-          # signing and the resulting catalog is unsigned.
+            # phpunit needs the php-pkg + php-xml + php-tokenizer extensions
+            # for the parallel-lint and our tests; bsdmake comes with base.
+            pkg install -y git php83 php83-tokenizer php83-xml php83-dom
+            # parallel-lint shells out to `php` -- make sure it's on PATH.
+            ln -sf /usr/local/bin/php83 /usr/local/bin/php || true
+            php -v
           envs: 'PKG_SIGNING_KEY'
           run: |
             set -eux
             WORKDIR=$(pwd)
             cd "${WORKDIR}/opnsense-plugins/ftp/netboot"
+
+            # Strict OPNsense lint. Surfaces model-XML convention violations,
+            # missing shebangs / +x bits, raw shell-outs from PHP, parallel-
+            # lint PHP syntax errors, and pkg-plist drift. Fails the build on
+            # any finding.
+            make lint
+
+            # PHPUnit. Falls into the make-test target only when a phpunit
+            # binary is present (we installed php-phpunit-9 above? No, we
+            # didn't -- install it explicitly so 'make test' actually runs.)
+            if ! command -v phpunit > /dev/null; then
+                # phpunit phar -- pinned to 9.x for PHP 8.x compat.
+                fetch -o /tmp/phpunit https://phar.phpunit.de/phpunit-9.phar
+                chmod +x /tmp/phpunit
+                ln -sf /tmp/phpunit /usr/local/bin/phpunit
+            fi
+            make test
+
             make package
             ls -la work/pkg
 
