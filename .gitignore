@@ -5,3 +5,7 @@ work/
 # Local OPNsense core checkout used for research/grepping during development.
 # Never committed -- big and unrelated.
 .research/
+# GitHub fine-grained PAT used by Claude's sandbox to read CI status via gh.
+# Lives in the workspace so it persists across our ephemeral sandboxes.
+# Never committed; revoke + delete the file when no longer needed.
+.gh-token
