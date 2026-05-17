@@ -131,16 +131,16 @@ jobs:
             # any finding.
             make lint
 
-            # PHPUnit. Falls into the make-test target only when a phpunit
-            # binary is present (we installed php-phpunit-9 above? No, we
-            # didn't -- install it explicitly so 'make test' actually runs.)
-            if ! command -v phpunit > /dev/null; then
-                # phpunit phar -- pinned to 9.x for PHP 8.x compat.
-                fetch -o /tmp/phpunit https://phar.phpunit.de/phpunit-9.phar
-                chmod +x /tmp/phpunit
-                ln -sf /tmp/phpunit /usr/local/bin/phpunit
-            fi
-            make test
+            # PHPUnit runs in ci.yml on the Linux runner, NOT here. The
+            # OPNsense 'make test' target wants TESTDIR at src/opnsense/
+            # mvc/tests/, but that path is owned by the opnsense-core
+            # package's pkg-plist -- any file we put there collides with
+            # core at install time. So we keep tests at <repo>/tests/
+            # and run them via ci.yml's plain phpunit invocation.
+            #
+            # Phalcon-bound tests (Layer 4 in doc/tdd.md) will eventually
+            # need to run in this VM since Phalcon isn't on the Linux
+            # runner. That's a future addition; for now no VM-side tests.
 
             make package
             ls -la work/pkg

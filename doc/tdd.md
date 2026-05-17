@@ -378,11 +378,17 @@ implementer to resolve at write time.
 
 - Mark each layer **DONE** / **PARTIAL** / **PROPOSED** in this doc as
   it lands.
-- Each layer's tests live in a predictable location, named to match:
-  - Layer 1: `src/opnsense/mvc/tests/*Test.php`
-  - Layer 2: `src/opnsense/mvc/tests/ModelXml*Test.php`
-  - Layer 3: `src/opnsense/mvc/tests/TemplateRender*Test.php`
-  - Layer 4: `src/opnsense/mvc/tests/Api*ControllerTest.php`
+- Each layer's tests live in a predictable location at the REPO ROOT
+  under `tests/`, NOT under `src/opnsense/mvc/tests/`. The latter is
+  owned by the opnsense-core package's pkg-plist, and any file we
+  put there collides with core at pkg install time (we caught this
+  the hard way during the first end-to-end install attempt). All
+  test files live OUTSIDE `src/` so they don't end up in the
+  auto-generated package manifest.
+  - Layer 1: `tests/*Test.php`
+  - Layer 2: `tests/ModelXml*Test.php`
+  - Layer 3: `tests/TemplateRender*Test.php`
+  - Layer 4: `tests/Api*ControllerTest.php`
   - Layer 5: `tests/configd/*Test.sh`
   - Layer 6: `tests/e2e/`
   - Layer 7: `tests/docs/`

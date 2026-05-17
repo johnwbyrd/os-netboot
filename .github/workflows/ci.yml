@@ -109,8 +109,9 @@ jobs:
           /tmp/phpunit --version
 
       - name: Run unit tests
-        # Tests live at the OPNsense-canonical location so the same phpunit
-        # config is picked up by `make test` inside the FreeBSD VM (see
-        # build-release.yml). TESTDIR defaults to src/opnsense/mvc/tests in
-        # opnsense/plugins/Mk/defaults.mk.
-        run: /tmp/phpunit -c src/opnsense/mvc/tests/phpunit.xml
+        # Tests live at <repo>/tests/ -- NOT at src/opnsense/mvc/tests/.
+        # The latter location is owned by the opnsense-core package and
+        # any file there collides with core at pkg install time. See
+        # doc/tdd.md "Layer 1" and the recovery commit that moved the
+        # tests out of the src/ tree.
+        run: /tmp/phpunit -c tests/phpunit.xml
