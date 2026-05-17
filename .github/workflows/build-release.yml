@@ -111,13 +111,36 @@ jobs:
             mkdir -p "${REPODIR_ABI}"
             cp work/pkg/*.pkg "${REPODIR_ABI}/" 2>/dev/null || cp work/pkg/*.txz "${REPODIR_ABI}/"
 
+            # SECURITY: 'set -x' (shell trace) prints every command's argv to
+            # stderr AFTER variable expansion. Touching $PKG_SIGNING_KEY under
+            # set -x therefore writes the cleartext PEM into the build log,
+            # where GHA's auto-masker substitutes *** line-by-line -- but the
+            # cleartext is already on the wire to the runner before masking.
+            # Turn trace OFF for the entire signing block so the secret value
+            # is never even an argument to a traced command.
+            set +x
+
+            have_signing_key=0
             if [ -n "${PKG_SIGNING_KEY:-}" ]; then
+                have_signing_key=1
+            fi
+
+            if [ "${have_signing_key}" = "1" ]; then
                 # Write the private key with a trailing newline (PEM format
                 # requires one after END PRIVATE KEY). chmod first so the
                 # write happens with the right mode from the start.
                 KEYFILE=$(mktemp)
                 chmod 600 "${KEYFILE}"
-                printf '%s\n' "${PKG_SIGNING_KEY}" > "${KEYFILE}"
+                printf '%s\n' "${PKG_SIGNING_KEY}" > "${KEYFILE}" 2>/dev/null
+
+                # Drop the env var so nothing downstream can accidentally
+                # re-trace it. The key is now only on disk at $KEYFILE.
+                unset PKG_SIGNING_KEY
+
+                # Safe to re-enable trace now: $KEYFILE holds the secret on
+                # disk, but the FILENAME is fine to log; the file content
+                # is not what gets expanded into any traced argv.
+                set -x
 
                 # FreeBSD's pkg-repo(8) uses positional 'signing_command:'
                 # syntax for the catalog-signing command:
