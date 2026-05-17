@@ -144,20 +144,26 @@ jobs:
             cp work/pkg/*.pkg "${REPODIR_ABI}/" 2>/dev/null || cp work/pkg/*.txz "${REPODIR_ABI}/"
 
             # Sign the freshly-built repo. $KEYFILE was set up at the very
-            # top of this script, before any other command ran, and the
-            # original env var was already unset. The signing command's
-            # argv contains only the FILENAME, which is fine to trace.
+            # top of this script (before any other command ran) and the
+            # original env var was already unset.
             #
-            # FreeBSD's pkg-repo(8) uses positional 'signing_command:'
-            # syntax: pkg repo <repo-path> signing_command: <the command>.
-            # The literal 'signing_command:' is a sentinel; every arg
-            # after it is the command. pkg pipes the SHA256 of the
-            # catalog to that command's stdin and saves stdout as the
-            # .sig file. openssl dgst -sha256 -sign <key> reads stdin
-            # and writes a binary signature to stdout, which is exactly
-            # what pkg wants. (The GNU-style '--signing-command "..."'
-            # form is NOT accepted by FreeBSD pkg.)
-            pkg repo "${REPODIR_ABI}" signing_command: openssl dgst -sha256 -sign "${KEYFILE}"
+            # We use FreeBSD pkg's BUILT-IN rsa: signing form rather than
+            # the shell-out 'signing_command: openssl dgst -sha256 -sign'
+            # form. Both syntaxes appear in pkg-repo(8)'s usage line, but
+            # the signing_command: path forks an external process and
+            # pipes the digest through stdin -- and in practice that
+            # pipe handshake hangs indefinitely on FreeBSD 14.2 / pkg 1.x
+            # for reasons that aren't clearly diagnosed. (Symptom: 'pkg
+            # repo' prints 'Creating repository ... done' and then
+            # hangs forever, with the openssl child stuck waiting on
+            # stdin even though pkg appears to have already produced
+            # the catalog data.) Four consecutive ~1-hour-stuck runs
+            # before we caught it.
+            #
+            # rsa:<keypath> tells pkg to sign with libcrypto directly,
+            # no subprocess, no stdin handshake. The keyfile is read
+            # once at the start. Fast and reliable.
+            pkg repo "${REPODIR_ABI}" "rsa:${KEYFILE}"
 
             # The trap from the top of the script will remove KEYFILE on
             # exit too; explicit rm here so it's gone immediately after
