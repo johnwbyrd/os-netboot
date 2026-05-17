@@ -4,21 +4,28 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
   workflow_dispatch:
+
+# We need contents:write to attach assets to a release and to push the
+# gh-pages branch that hosts the pkg repo catalog.
+permissions:
+  contents: write
 
 jobs:
   build:
-    name: Build OPNsense plugin .txz
+    name: Build, sign, and publish OPNsense plugin pkg
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # needed to attach assets to a release
+
     steps:
       - name: Check out this plugin
         uses: actions/checkout@v4
         with:
           path: os-netboot
+          fetch-depth: 0
 
-      - name: Check out opnsense/plugins for Mk infrastructure
+      - name: Check out opnsense/plugins for the Mk/ build infrastructure
         uses: actions/checkout@v4
         with:
           repository: opnsense/plugins
@@ -29,36 +36,102 @@ jobs:
         run: |
           set -eux
           mkdir -p opnsense-plugins/ftp/netboot
-          # Copy everything except the .git and CI workflow into ftp/netboot.
-          # rsync would be cleaner; tar avoids an extra apt install.
           tar -C os-netboot \
               --exclude='.git' \
               --exclude='.github' \
+              --exclude='dist' \
+              --exclude='.research' \
               -cf - . | tar -C opnsense-plugins/ftp/netboot -xf -
 
-      - name: Build the package inside a FreeBSD VM
+      - name: Build the .pkg inside a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:
           release: "14.2"
           usesh: true
-          # The plugins build only needs make + git; pkg is preinstalled.
           prepare: |
             pkg install -y git
+          # The VM mounts $GITHUB_WORKSPACE at /home/runner/work/<repo>/<repo>.
+          # We build the .pkg, then run `pkg repo` to generate the catalog
+          # (packagesite.pkg + meta.conf). Signing is done with an inline
+          # PEM key passed via env -- pkg-repo(8) supports `--signing-command`.
+          # If PKG_SIGNING_KEY is unset (e.g. PR builds from forks), we skip
+          # signing and the resulting catalog is unsigned.
+          envs: 'PKG_SIGNING_KEY'
           run: |
             set -eux
-            cd /home/runner/work/${GITHUB_REPOSITORY##*/}/${GITHUB_REPOSITORY##*/}/opnsense-plugins/ftp/netboot
+            WORKDIR=$(pwd)
+            cd "${WORKDIR}/opnsense-plugins/ftp/netboot"
             make package
             ls -la work/pkg
 
-      - name: Locate the built .txz
+            REPODIR="${WORKDIR}/pkg-repo"
+            ABI=$(pkg config ABI)
+            REPODIR_ABI="${REPODIR}/${ABI}"
+            mkdir -p "${REPODIR_ABI}"
+            cp work/pkg/*.pkg "${REPODIR_ABI}/" 2>/dev/null || cp work/pkg/*.txz "${REPODIR_ABI}/"
+
+            if [ -n "${PKG_SIGNING_KEY:-}" ]; then
+                # Write the private key to a tmpfile, run pkg-repo with a
+                # signing-command that openssl-signs the catalog hash, scrub
+                # the key file.
+                KEYFILE=$(mktemp)
+                printf '%s' "${PKG_SIGNING_KEY}" > "${KEYFILE}"
+                chmod 600 "${KEYFILE}"
+                pkg repo "${REPODIR_ABI}" signing_command: openssl dgst -sha256 -sign "${KEYFILE}"
+                rm -f "${KEYFILE}"
+            else
+                echo "::warning::PKG_SIGNING_KEY not set -- producing unsigned catalog (clients must configure signature_type: none)"
+                pkg repo "${REPODIR_ABI}"
+            fi
+
+            ls -la "${REPODIR_ABI}"
+
+      - name: Stage pages tree (pkg/${ABI}/ + public key + install helpers)
+        run: |
+          set -eux
+          mkdir -p pages/pkg
+          cp -R pkg-repo/* pages/pkg/
+          # Public key and the .conf snippet go at the root for easy fetch by users.
+          if [ -f os-netboot/dist/os-netboot.pub ]; then
+            cp os-netboot/dist/os-netboot.pub pages/os-netboot.pub
+          fi
+          cp os-netboot/dist/os-netboot.conf pages/os-netboot.conf
+          # Drop a tiny index.html so visiting the page root isn't a 404.
+          cat > pages/index.html <<'EOF'
+          <!doctype html>
+          <html><head><meta charset="utf-8"><title>os-netboot pkg repo</title></head>
+          <body>
+            <h1>os-netboot</h1>
+            <p>OPNsense pkg repository for the os-netboot plugin.</p>
+            <p>Install: see <a href="https://github.com/johnwbyrd/os-netboot#install">README</a>.</p>
+            <ul>
+              <li><a href="os-netboot.conf">os-netboot.conf</a> &mdash; drop at <code>/usr/local/etc/pkg/repos/</code></li>
+              <li><a href="os-netboot.pub">os-netboot.pub</a> &mdash; drop at <code>/usr/local/etc/ssl/</code></li>
+              <li><a href="pkg/">pkg/</a> &mdash; signed package catalog (one subdirectory per ABI)</li>
+            </ul>
+          </body></html>
+          EOF
+          ls -laR pages
+
+      - name: Publish to gh-pages
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./pages
+          publish_branch: gh-pages
+          keep_files: false
+          force_orphan: true
+
+      - name: Locate the built .txz/.pkg
         id: artifact
         run: |
           set -eux
-          ARTIFACT=$(ls opnsense-plugins/ftp/netboot/work/pkg/*.txz | head -n1)
+          ARTIFACT=$(ls opnsense-plugins/ftp/netboot/work/pkg/*.pkg opnsense-plugins/ftp/netboot/work/pkg/*.txz 2>/dev/null | head -n1)
           echo "path=$ARTIFACT" >> "$GITHUB_OUTPUT"
           echo "name=$(basename $ARTIFACT)" >> "$GITHUB_OUTPUT"
 
-      - name: Upload artifact (always, regardless of trigger)
+      - name: Upload artifact (every build)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact.outputs.name }}
