@@ -1,0 +1,10 @@
+<acl>
+    <page-netboot>
+        <name>Lobby: Netboot</name>
+        <description>Allow access to the Netboot pages and API</description>
+        <patterns>
+            <pattern>ui/netboot/*</pattern>
+            <pattern>api/netboot/*</pattern>
+        </patterns>
+    </page-netboot>
+</acl>

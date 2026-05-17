@@ -1,0 +1,74 @@
+name: build-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build OPNsense plugin .txz
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to attach assets to a release
+    steps:
+      - name: Check out this plugin
+        uses: actions/checkout@v4
+        with:
+          path: os-netboot
+
+      - name: Check out opnsense/plugins for Mk infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: opnsense/plugins
+          path: opnsense-plugins
+          ref: master
+
+      - name: Inject this plugin into the opnsense/plugins tree
+        run: |
+          set -eux
+          mkdir -p opnsense-plugins/ftp/netboot
+          # Copy everything except the .git and CI workflow into ftp/netboot.
+          # rsync would be cleaner; tar avoids an extra apt install.
+          tar -C os-netboot \
+              --exclude='.git' \
+              --exclude='.github' \
+              -cf - . | tar -C opnsense-plugins/ftp/netboot -xf -
+
+      - name: Build the package inside a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.2"
+          usesh: true
+          # The plugins build only needs make + git; pkg is preinstalled.
+          prepare: |
+            pkg install -y git
+          run: |
+            set -eux
+            cd /home/runner/work/${GITHUB_REPOSITORY##*/}/${GITHUB_REPOSITORY##*/}/opnsense-plugins/ftp/netboot
+            make package
+            ls -la work/pkg
+
+      - name: Locate the built .txz
+        id: artifact
+        run: |
+          set -eux
+          ARTIFACT=$(ls opnsense-plugins/ftp/netboot/work/pkg/*.txz | head -n1)
+          echo "path=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename $ARTIFACT)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact (always, regardless of trigger)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artifact.outputs.path }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true

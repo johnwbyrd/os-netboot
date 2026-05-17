@@ -1,0 +1,10 @@
+Netboot (PXE/iPXE) infrastructure for OPNsense.
+
+A single content root served simultaneously by TFTP (read-only, for firmware
+PXE/UEFI bootstrap), HTTP (read-only, for iPXE chainloaded payloads and UEFI
+HTTP Boot), and optionally SFTP (write, for admin bulk ingress). A web GUI
+file manager handles per-file upload, download, delete, and server-side
+fetch-from-URL so files can be pulled directly onto the firewall without
+shell access. Adds a Dnsmasq "DHCP boot" wiring helper that populates BIOS
+and UEFI arch-aware entries automatically, and installs its own firewall
+pass rules for the configured listen interfaces.

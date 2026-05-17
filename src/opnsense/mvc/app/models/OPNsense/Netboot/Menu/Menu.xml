@@ -1,0 +1,8 @@
+<menu>
+    <Services>
+        <Netboot VisibleName="Netboot" cssClass="fa fa-fw fa-rocket" url="/ui/netboot/general">
+            <General VisibleName="General" url="/ui/netboot/general"/>
+            <Files VisibleName="Files" url="/ui/netboot/files"/>
+        </Netboot>
+    </Services>
+</menu>

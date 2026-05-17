@@ -1,0 +1,4 @@
+work/
+*.txz
+*.swp
+.DS_Store

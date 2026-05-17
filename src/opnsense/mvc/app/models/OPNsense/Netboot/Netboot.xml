@@ -1,0 +1,54 @@
+<model>
+    <mount>//OPNsense/netboot</mount>
+    <description>Netboot (PXE/iPXE) infrastructure: TFTP + HTTP + optional SFTP</description>
+    <items>
+        <general>
+            <enabled type="BooleanField">
+                <default>0</default>
+                <Required>Y</Required>
+            </enabled>
+            <interfaces type="InterfaceField">
+                <Multiple>Y</Multiple>
+                <FilterAttribute>enable</FilterAttribute>
+                <FilterValue>1</FilterValue>
+                <Required>N</Required>
+            </interfaces>
+            <content_root type="TextField">
+                <default>/var/netboot</default>
+                <Required>Y</Required>
+                <Mask>/^\/[a-zA-Z0-9_\-\/]+$/</Mask>
+                <ValidationMessage>Content root must be an absolute path containing only letters, digits, underscores, hyphens, and slashes.</ValidationMessage>
+            </content_root>
+            <tftp_enabled type="BooleanField">
+                <default>1</default>
+                <Required>Y</Required>
+            </tftp_enabled>
+            <http_enabled type="BooleanField">
+                <default>1</default>
+                <Required>Y</Required>
+            </http_enabled>
+            <http_port type="PortField">
+                <default>8069</default>
+                <Required>Y</Required>
+            </http_port>
+            <dhcp_helper_enabled type="BooleanField">
+                <default>0</default>
+                <Required>Y</Required>
+            </dhcp_helper_enabled>
+        </general>
+        <sftp>
+            <enabled type="BooleanField">
+                <default>0</default>
+                <Required>Y</Required>
+            </enabled>
+            <port type="PortField">
+                <default>2069</default>
+                <Required>Y</Required>
+            </port>
+            <authorized_keys type="TextField">
+                <Required>N</Required>
+                <Multiline>Y</Multiline>
+            </authorized_keys>
+        </sftp>
+    </items>
+</model>

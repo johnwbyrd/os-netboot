@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# PROVIDE: netboot_tftpd
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+#
+# Custom rc.d wrapper for the os-netboot TFTP daemon. We do not use the
+# tftp-hpa pkg's stock rc script because that one reads global /etc/rc.conf
+# entries (tftpd_enable, tftpd_flags) which would conflict with anyone else
+# who wants a tftpd. This wrapper has its own name and reads its config
+# from a file rendered by the OPNsense template engine.
+#
+
+. /etc/rc.subr
+
+name="netboot_tftpd"
+rcvar="${name}_enable"
+desc="os-netboot TFTP daemon"
+
+pidfile="/var/run/${name}.pid"
+argsfile="/var/etc/netboot/tftpd-args"
+program="/usr/local/libexec/in.tftpd"
+
+# The daemon(8) wrapper handles backgrounding and pidfile management. We do
+# this rather than rely on each daemon's native daemonization because we want
+# uniform behavior across tftpd, darkhttpd, and our SFTP sshd.
+command="/usr/sbin/daemon"
+command_args="-c -f -p ${pidfile} -t ${desc}"
+
+start_precmd="${name}_precmd"
+
+netboot_tftpd_precmd()
+{
+    if [ ! -r "${argsfile}" ]; then
+        warn "${argsfile} not found; refusing to start (templates not rendered yet?)"
+        return 1
+    fi
+    if [ ! -x "${program}" ]; then
+        warn "${program} not found; is the tftp-hpa package installed?"
+        return 1
+    fi
+    # Append the actual program and its args to command_args.
+    command_args="${command_args} ${program} $(cat ${argsfile})"
+}
+
+load_rc_config $name
+: ${netboot_tftpd_enable:="YES"}
+
+run_rc_command "$1"
