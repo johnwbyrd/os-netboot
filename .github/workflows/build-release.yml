@@ -64,7 +64,13 @@ jobs:
           prepare: |
             # bsdmake comes with FreeBSD base. The php83 port installs the
             # binary directly as /usr/local/bin/php; no aliasing needed.
-            # tokenizer/xml/dom are required by parallel-lint and PHPUnit.
+            #
+            # We pkg-upgrade first because the VM image's libpcre2-8 was
+            # built against a stale ABI; a fresh php83 from the current pkg
+            # repo wants PCRE2_10.47 and fails to dlopen with the stale lib.
+            # Upgrading aligns libpcre2 (and anything else the new php
+            # transitively depends on) before the php install lands.
+            pkg upgrade -y
             pkg install -y git php83 php83-tokenizer php83-xml php83-dom
             php -v
           envs: 'PKG_SIGNING_KEY'
