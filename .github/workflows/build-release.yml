@@ -81,7 +81,39 @@ jobs:
             php -v
           envs: 'PKG_SIGNING_KEY'
           run: |
-            set -eux
+            # SECURITY: capture the signing secret to a tmpfile and drop
+            # it from the env BEFORE running anything else. Otherwise
+            # every subprocess (make, phpunit, pkg, ...) inherits an env
+            # that contains the PEM, and a future bug or third-party
+            # rule that dumps env would leak it. Once captured to disk,
+            # the secret only travels by file path; commands trace the
+            # path, not the bytes.
+            #
+            # set -e is on, set -x is off until the secret leaves the env.
+            set -eu
+
+            if [ -z "${PKG_SIGNING_KEY:-}" ]; then
+                echo "ERROR: signing key env var is empty inside the FreeBSD VM."
+                echo "       Expected: a non-empty value forwarded from the runner."
+                echo "       Check the repo secret at"
+                echo "         github.com/johnwbyrd/os-netboot/settings/secrets/actions"
+                echo "       and the env: + envs: lines on the FreeBSD VM step in"
+                echo "       .github/workflows/build-release.yml."
+                exit 1
+            fi
+
+            KEYFILE=$(mktemp)
+            chmod 600 "${KEYFILE}"
+            # printf's stderr piped away to belt-and-suspenders against any
+            # diagnostic that might quote the value.
+            printf '%s\n' "${PKG_SIGNING_KEY}" > "${KEYFILE}" 2>/dev/null
+            unset PKG_SIGNING_KEY
+            # Make sure the keyfile is shredded even if a later step fails.
+            trap 'rm -f "${KEYFILE}"' EXIT INT TERM
+
+            # OK -- the env is now clean. From here on, trace is fine.
+            set -x
+
             WORKDIR=$(pwd)
             cd "${WORKDIR}/opnsense-plugins/ftp/netboot"
 
@@ -111,91 +143,41 @@ jobs:
             mkdir -p "${REPODIR_ABI}"
             cp work/pkg/*.pkg "${REPODIR_ABI}/" 2>/dev/null || cp work/pkg/*.txz "${REPODIR_ABI}/"
 
-            # SECURITY: 'set -x' (shell trace) prints every command's argv to
-            # stderr AFTER variable expansion. Touching $PKG_SIGNING_KEY under
-            # set -x therefore writes the cleartext PEM into the build log,
-            # where GHA's auto-masker substitutes *** line-by-line -- but the
-            # cleartext is already on the wire to the runner before masking.
-            # Turn trace OFF for the entire signing block so the secret value
-            # is never even an argument to a traced command.
-            set +x
+            # Sign the freshly-built repo. $KEYFILE was set up at the very
+            # top of this script, before any other command ran, and the
+            # original env var was already unset. The signing command's
+            # argv contains only the FILENAME, which is fine to trace.
+            #
+            # FreeBSD's pkg-repo(8) uses positional 'signing_command:'
+            # syntax: pkg repo <repo-path> signing_command: <the command>.
+            # The literal 'signing_command:' is a sentinel; every arg
+            # after it is the command. pkg pipes the SHA256 of the
+            # catalog to that command's stdin and saves stdout as the
+            # .sig file. openssl dgst -sha256 -sign <key> reads stdin
+            # and writes a binary signature to stdout, which is exactly
+            # what pkg wants. (The GNU-style '--signing-command "..."'
+            # form is NOT accepted by FreeBSD pkg.)
+            pkg repo "${REPODIR_ABI}" signing_command: openssl dgst -sha256 -sign "${KEYFILE}"
 
-            have_signing_key=0
-            if [ -n "${PKG_SIGNING_KEY:-}" ]; then
-                have_signing_key=1
-            fi
+            # The trap from the top of the script will remove KEYFILE on
+            # exit too; explicit rm here so it's gone immediately after
+            # the last use, not just on script termination.
+            rm -f "${KEYFILE}"
+            trap - EXIT INT TERM
 
-            if [ "${have_signing_key}" = "1" ]; then
-                # Write the private key with a trailing newline (PEM format
-                # requires one after END PRIVATE KEY). chmod first so the
-                # write happens with the right mode from the start.
-                KEYFILE=$(mktemp)
-                chmod 600 "${KEYFILE}"
-                printf '%s\n' "${PKG_SIGNING_KEY}" > "${KEYFILE}" 2>/dev/null
-
-                # Drop the env var so nothing downstream can accidentally
-                # re-trace it. The key is now only on disk at $KEYFILE.
-                unset PKG_SIGNING_KEY
-
-                # Safe to re-enable trace now: $KEYFILE holds the secret on
-                # disk, but the FILENAME is fine to log; the file content
-                # is not what gets expanded into any traced argv.
-                set -x
-
-                # FreeBSD's pkg-repo(8) uses positional 'signing_command:'
-                # syntax for the catalog-signing command:
-                #   pkg repo <repo-path> signing_command: <the command>
-                # The literal 'signing_command:' is a sentinel; every arg
-                # after it is the command. pkg pipes the SHA256 of the
-                # catalog to that command's stdin and saves stdout as the
-                # .sig alongside the catalog file. openssl dgst -sha256
-                # -sign <key> reads stdin and writes a binary signature
-                # to stdout, which is exactly what pkg wants.
-                #
-                # (The long-option '--signing-command "..."' form is from
-                # GNU-style tools; FreeBSD's pkg does not accept it and
-                # errors with 'unrecognized option' if you try.)
-                pkg repo "${REPODIR_ABI}" signing_command: openssl dgst -sha256 -sign "${KEYFILE}"
-
-                rm -f "${KEYFILE}"
-
-                # Sanity check: a .sig file MUST exist for at least one of
-                # the catalog parts, otherwise the catalog is effectively
-                # unsigned and clients with signature_type: pubkey will
-                # refuse to use it. Fail loudly here instead of letting a
-                # broken repo publish.
-                if ! ls "${REPODIR_ABI}"/*.sig >/dev/null 2>&1; then
-                    echo "ERROR: pkg repo completed but produced no .sig files in ${REPODIR_ABI}."
-                    echo "       Expected: data.pkg.sig (and/or packagesite.pkg.sig) generated by"
-                    echo "       the --signing-command invocation. The signing command may have"
-                    echo "       failed silently (bad key, bad openssl invocation) or pkg-repo's"
-                    echo "       signing-command interface may differ on this FreeBSD release."
-                    echo "       Files actually present in the repo directory:"
-                    ls -la "${REPODIR_ABI}"
-                    exit 1
-                fi
-            else
-                # An unsigned catalog is published as broken (clients with
-                # signature_type: pubkey in their .conf -- which is what we
-                # ship -- reject it at install time with "No signature
-                # found in the repository"). So this is a hard failure,
-                # not a warning. Likely causes: the secret is not set on
-                # the repo, OR the env: block on the FreeBSD VM step is
-                # missing so the value never reached the runner before
-                # the action tried to forward it into the VM.
-                #
-                # NOTE: deliberately not echoing the secret name in a
-                # form that GitHub Actions might template-expand. See
-                # the file at .github/workflows/build-release.yml; do
-                # NOT add the secret expression as a string literal in
-                # any echo, or GHA expands it at YAML parse time and
-                # bakes the cleartext value into the script.
-                echo "ERROR: signing key env var is empty inside the FreeBSD VM."
-                echo "       Expected: a non-empty value forwarded from the runner."
-                echo "       Check the repo secret at"
-                echo "         github.com/johnwbyrd/os-netboot/settings/secrets/actions"
-                echo "       and the env: + envs: lines on the FreeBSD VM step in"
-                echo "       .github/workflows/build-release.yml."
+            # Sanity check: a .sig file MUST exist for at least one of
+            # the catalog parts, otherwise the catalog is effectively
+            # unsigned and clients with signature_type: pubkey will
+            # refuse to use it. Fail loudly here instead of letting a
+            # broken repo publish.
+            if ! ls "${REPODIR_ABI}"/*.sig >/dev/null 2>&1; then
+                echo "ERROR: pkg repo completed but produced no .sig files in ${REPODIR_ABI}."
+                echo "       Expected: data.pkg.sig (and/or packagesite.pkg.sig) generated by"
+                echo "       the signing_command: invocation. The signing command may have"
+                echo "       failed silently (bad key, bad openssl invocation) or pkg-repo's"
+                echo "       signing interface may differ on this FreeBSD release."
+                echo "       Files actually present in the repo directory:"
+                ls -la "${REPODIR_ABI}"
                 exit 1
             fi
 
