@@ -67,8 +67,15 @@ reverse) if you enabled it.
 ### Step 2.  Install in the GUI
 
 Navigate to **System → Firmware → Plugins**.  Enable **Show community
-plugins** (top-right checkbox).  Find `os-netboot` in the list and click
-the **+** icon next to it.
+plugins** (top-right checkbox).  Find `os-netboot-devel` in the list
+and click the **+** icon next to it.
+
+The `-devel` suffix marks this as the rolling development build served
+from my third-party repo.  When the plugin eventually lands in the
+official `opnsense/plugins` collection, the release-tier name will be
+`os-netboot` without the suffix.  Until then, this third-party-repo
+install path ships under the `-devel` name to keep that distinction
+honest (and to avoid a name collision once the upstream release lands).
 
 That's the entire install.  No more shell.
 
@@ -132,11 +139,11 @@ You'll land chrooted in the content root.
 Both are GUI operations, just like the install.
 
 - **Upgrade.**  **System → Firmware → Plugins** — when a newer version of
-  `os-netboot` is in the repo, the **+** icon is replaced by an upgrade
-  arrow.  Click it.  Or use the global **System → Firmware → Status →
-  Check for updates** which includes plugins.
+  `os-netboot-devel` is in the repo, the **+** icon is replaced by an
+  upgrade arrow.  Click it.  Or use the global **System → Firmware →
+  Status → Check for updates** which includes plugins.
 - **Uninstall.**  **System → Firmware → Plugins** — click the trash icon
-  next to `os-netboot`.  Your content (`/var/netboot`) and settings
+  next to `os-netboot-devel`.  Your content (`/var/netboot`) and settings
   (`config.xml` netboot section) are preserved.  Re-install picks up where
   you left off.
 
