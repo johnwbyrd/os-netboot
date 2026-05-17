@@ -15,7 +15,9 @@
 
 spl_autoload_register(function (string $class) {
     $prefix = 'OPNsense\\Netboot\\';
-    $base = __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/Netboot/';
+    // Tests live at src/opnsense/mvc/tests/; library is at
+    // src/opnsense/mvc/app/library/OPNsense/Netboot/.
+    $base = __DIR__ . '/../app/library/OPNsense/Netboot/';
     if (strpos($class, $prefix) !== 0) {
         return;
     }
