@@ -1,61 +1,70 @@
 <form>
+    <!--
+      Field ids MUST be of the form netboot.<section>.<field> where <section> is
+      one of the top-level sections in src/opnsense/mvc/app/models/OPNsense/Netboot/Netboot.xml
+      (currently 'general' and 'sftp'). The 'netboot' prefix matches
+      Api/GeneralController.php::$internalModelName, which is the envelope key
+      both setFormData() uses (to populate inputs from /api/netboot/general/get)
+      and getFormData() uses (to build the POST body for /api/netboot/general/set).
+      A mismatch here silently leaves selects empty and inputs blank.
+    -->
     <field>
-        <id>general.enabled</id>
+        <id>netboot.general.enabled</id>
         <label>Enable Netboot</label>
         <type>checkbox</type>
         <help>Master switch. When unchecked, all Netboot daemons are stopped.</help>
     </field>
     <field>
-        <id>general.interfaces</id>
+        <id>netboot.general.interfaces</id>
         <label>Listen interfaces</label>
         <type>select_multiple</type>
         <help>Interfaces on which Netboot will accept client connections. Auto-firewall rules are added for these interfaces only. Typically your LAN.</help>
     </field>
     <field>
-        <id>general.content_root</id>
+        <id>netboot.general.content_root</id>
         <label>Content root</label>
         <type>text</type>
         <help>Filesystem path that TFTP, HTTP, and SFTP all serve from. Default /var/netboot is fine for nearly everyone.</help>
     </field>
     <field>
-        <id>general.tftp_enabled</id>
+        <id>netboot.general.tftp_enabled</id>
         <label>Enable TFTP (UDP/69)</label>
         <type>checkbox</type>
         <help>Required for firmware-stage PXE/UEFI bootstrap. Leave on unless you know your clients reach the firewall via UEFI HTTP Boot only.</help>
     </field>
     <field>
-        <id>general.http_enabled</id>
+        <id>netboot.general.http_enabled</id>
         <label>Enable HTTP</label>
         <type>checkbox</type>
         <help>Serves the same content root over HTTP for iPXE chainloading and large transfers (menus, kernels, initrds, ISOs).</help>
     </field>
     <field>
-        <id>general.http_port</id>
+        <id>netboot.general.http_port</id>
         <label>HTTP port</label>
         <type>text</type>
         <help>TCP port for the dedicated lighttpd instance. Default 8069 -- chosen to avoid conflict with the OPNsense management webGUI on 80/443.</help>
     </field>
     <field>
-        <id>general.dhcp_helper_enabled</id>
+        <id>netboot.general.dhcp_helper_enabled</id>
         <label>Auto-wire Dnsmasq DHCP boot entries</label>
         <type>checkbox</type>
         <help>When checked, on each save Netboot creates (or updates) Dnsmasq DHCP "boot" entries pointing at the Netboot HTTP listen address, with arch-aware tags so both BIOS and UEFI x86_64 clients pick up the right iPXE binary. Has no effect unless OPNsense's built-in Dnsmasq DNS/DHCP service is your DHCP provider.</help>
     </field>
 
     <field>
-        <id>sftp.enabled</id>
+        <id>netboot.sftp.enabled</id>
         <label>Enable SFTP ingress</label>
         <type>checkbox</type>
         <help>Optional. Runs a dedicated sshd instance, SFTP-only, chrooted to the content root, separate from your management SSH. Key-based auth only -- no passwords. Off by default; only enable if you need rsync/sftp-style bulk uploads.</help>
     </field>
     <field>
-        <id>sftp.port</id>
+        <id>netboot.sftp.port</id>
         <label>SFTP port</label>
         <type>text</type>
         <help>TCP port for the SFTP-only sshd. Default 2069. Do NOT set this to 22 -- that's the management SSH port.</help>
     </field>
     <field>
-        <id>sftp.authorized_keys</id>
+        <id>netboot.sftp.authorized_keys</id>
         <label>Authorized public keys</label>
         <type>textbox</type>
         <help>One SSH public key per line (ssh-ed25519 ..., ssh-rsa ...). Any private key holder listed here can sftp into the content root. Public keys only; never paste a private key here.</help>

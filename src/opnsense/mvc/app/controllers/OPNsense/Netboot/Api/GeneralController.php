@@ -18,6 +18,16 @@ use OPNsense\Base\ApiMutableModelControllerBase;
  */
 class GeneralController extends ApiMutableModelControllerBase
 {
-    protected static $internalModelName = 'general';
+    // The JSON envelope key used in both directions of the API:
+    //   GET  /api/netboot/general/get -> {"netboot": {"general": {...}, "sftp": {...}}}
+    //   POST /api/netboot/general/set <- {"netboot": {"general": {...}, "sftp": {...}}}
+    //
+    // The OPNsense form binder (setFormData / getFormData in www/js/opnsense.js)
+    // walks an input element's id token-by-token through this envelope, so all
+    // form field ids in forms/general.xml MUST start with "netboot." to match.
+    // Picking 'netboot' here (not 'general') avoids a name collision with the
+    // <general> section inside the model; if both layers were 'general' the
+    // walker would descend once and then never find the field's section.
+    protected static $internalModelName = 'netboot';
     protected static $internalModelClass = 'OPNsense\Netboot\Netboot';
 }
