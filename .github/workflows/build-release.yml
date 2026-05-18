@@ -72,6 +72,13 @@ jobs:
         # runner -- so we must materialize it from secrets here first.
         env:
           PKG_SIGNING_KEY: ${{ secrets.PKG_SIGNING_KEY }}
+          # Per-build monotonic counter. Lands as the pkg revision suffix
+          # so every CI run produces a distinct pkg version (0.1.0_NN),
+          # which means `pkg upgrade` actually picks up new builds without
+          # the user having to delete-and-reinstall or clear the pkg cache.
+          # github.run_number increments on every workflow invocation
+          # including re-runs of the same commit.
+          GH_RUN_NUMBER: ${{ github.run_number }}
         with:
           release: "14.2"
           usesh: true
@@ -87,7 +94,7 @@ jobs:
             pkg upgrade -y
             pkg install -y git php83 php83-tokenizer php83-xml php83-dom
             php -v
-          envs: 'PKG_SIGNING_KEY'
+          envs: 'PKG_SIGNING_KEY GH_RUN_NUMBER'
           run: |
             # SECURITY: capture the signing secret to a tmpfile and drop
             # it from the env BEFORE running anything else. Otherwise
@@ -142,7 +149,13 @@ jobs:
             # need to run in this VM since Phalcon isn't on the Linux
             # runner. That's a future addition; for now no VM-side tests.
 
-            make package
+            # PLUGIN_REVISION forces every CI run to produce a distinct
+            # pkg version. Without it, two builds at the same PLUGIN_VERSION
+            # produce identical pkg metadata and `pkg upgrade` won't see
+            # them as upgrades. Result: users have to delete-and-reinstall
+            # to pick up template / controller fixes. With it, each run
+            # gets a fresh suffix like 0.1.0_47 and pkg-upgrade DTRT.
+            make package PLUGIN_REVISION="${GH_RUN_NUMBER}"
             ls -la work/pkg
 
             REPODIR="${WORKDIR}/pkg-repo"
