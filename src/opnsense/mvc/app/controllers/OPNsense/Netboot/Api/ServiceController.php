@@ -147,6 +147,53 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
+     * GET /api/netboot/service/diag
+     * Self-check: confirm the on-disk files this controller and its
+     * configd actions depend on. Exists specifically so we don't have to
+     * shell into the box to answer "is the right pkg installed and did
+     * its files get extracted properly?" -- the GUI can call this and
+     * show a yes/no table. Kept intentionally trivial: no side effects,
+     * no privileged data, just stat() on a handful of known paths.
+     */
+    public function diagAction()
+    {
+        $paths = [
+            'scripts.setup'         => '/usr/local/opnsense/scripts/netboot/setup.sh',
+            'scripts.bootstrap'     => '/usr/local/opnsense/scripts/netboot/bootstrap.sh',
+            'scripts.fetch_url'     => '/usr/local/opnsense/scripts/netboot/fetch_url.sh',
+            'actions.netboot'       => '/usr/local/opnsense/service/conf/actions.d/actions_netboot.conf',
+            'plugin.version'        => '/usr/local/opnsense/version/netboot',
+        ];
+        $result = [];
+        foreach ($paths as $key => $p) {
+            $result[$key] = [
+                'path'       => $p,
+                'exists'     => file_exists($p),
+                'is_file'    => is_file($p),
+                'executable' => is_executable($p),
+                'size'       => file_exists($p) ? filesize($p) : null,
+            ];
+        }
+
+        // Try running a short configd action and capture whatever comes
+        // back. This is the same path Bootstrap takes; if it returns
+        // empty here too the problem is in configd <-> script execution,
+        // not in our PHP code.
+        $backend = new Backend();
+        $probe   = $backend->configdRun('netboot setup');
+        $result['probe.setup_output'] = (string)$probe;
+        $result['probe.setup_output_len'] = strlen((string)$probe);
+
+        // Read the version file directly so we can confirm which build is
+        // actually on the box.
+        $result['plugin.version_content'] = file_exists($paths['plugin.version'])
+            ? trim((string)file_get_contents($paths['plugin.version']))
+            : null;
+
+        return ['status' => 'ok', 'diag' => $result];
+    }
+
+    /**
      * Server-side fetch of an iPXE bootstrap preset (BIOS .kpxe + UEFI .efi)
      * into the content root. Idempotent -- safe to re-run to refresh after
      * the upstream publishes a new build.

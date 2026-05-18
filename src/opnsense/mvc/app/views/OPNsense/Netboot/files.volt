@@ -67,7 +67,17 @@
                 </button>
             </div>
             <p id="bootstrapPresetDescription" class="help-block" style="margin-top:4px;"></p>
-            <pre id="bootstrapOutput" style="display:none; margin-top: 8px; max-height: 300px; overflow:auto;"></pre>
+            <!--
+              white-space: pre-wrap so a long single-line error message
+              (the API can return one) wraps to fit the column instead
+              of becoming a 1-line-tall box with a horizontal scrollbar.
+              min-height so an empty/just-shown pre still has a visible
+              footprint while we're waiting on the response.
+              max-height + overflow:auto so a many-line success log
+              (the bootstrap script prints one line per file) stays
+              compact and scrollable.
+            -->
+            <pre id="bootstrapOutput" style="display:none; margin-top: 8px; min-height: 4em; max-height: 300px; overflow:auto; white-space: pre-wrap; word-break: break-word;"></pre>
 
             <hr/>
 
