@@ -55,14 +55,19 @@
 
             <h2>{{ lang._('Quick start') }}</h2>
             <p>
-                {{ lang._('Click the button below once to fetch both the legacy-BIOS and UEFI x86_64 iPXE bootstrap binaries from boot.netboot.xyz into the content root. After this every PXE-booted machine on your network -- regardless of firmware -- can reach the netboot.xyz menu.') }}
+                {{ lang._('Pick an iPXE bootstrap and click Fetch. We download both the legacy-BIOS (.kpxe) and UEFI x86_64 (.efi) binaries for the selected preset into the content root, so every PXE-booted machine on your LAN can reach a menu regardless of firmware.') }}
             </p>
-            <button id="bootstrapBtn" class="btn btn-primary">
-                <i class="fa fa-cloud-download" aria-hidden="true"></i>
-                {{ lang._('Bootstrap netboot.xyz (BIOS + UEFI)') }}
-                <i id="bootstrapBtn_progress" class=""></i>
-            </button>
-            <pre id="bootstrapOutput" style="display:none; margin-top: 12px;"></pre>
+            <div class="form-inline" style="margin-bottom:6px;">
+                <select id="bootstrapPreset" class="form-control" style="min-width: 320px;">
+                </select>
+                <button id="bootstrapBtn" class="btn btn-primary">
+                    <i class="fa fa-cloud-download" aria-hidden="true"></i>
+                    {{ lang._('Fetch') }}
+                    <i id="bootstrapBtn_progress" class=""></i>
+                </button>
+            </div>
+            <p id="bootstrapPresetDescription" class="help-block" style="margin-top:4px;"></p>
+            <pre id="bootstrapOutput" style="display:none; margin-top: 8px; max-height: 300px; overflow:auto;"></pre>
 
             <hr/>
 
@@ -225,18 +230,54 @@
                    });
         });
 
+        // Populate the bootstrap preset dropdown from the API. Doing this
+        // server-side (rather than hard-coding the list in JS) keeps the
+        // catalog of presets in one place -- Api/ServiceController.php --
+        // so adding a new preset is a one-controller edit.
+        var bootstrapPresets = {};
+        $.getJSON('/api/netboot/service/bootstrap_presets', function (data) {
+            if (data && data.presets) {
+                bootstrapPresets = data.presets;
+                var $sel = $('#bootstrapPreset').empty();
+                $.each(data.presets, function (key, info) {
+                    $sel.append($('<option>').val(key).text(info.label));
+                });
+                $sel.change(); // populate description for initial value
+            }
+        });
+        $('#bootstrapPreset').change(function () {
+            var key = $(this).val();
+            var info = bootstrapPresets[key];
+            $('#bootstrapPresetDescription').text(info ? info.description : '');
+        });
+
         $('#bootstrapBtn').click(function () {
+            var preset = $('#bootstrapPreset').val() || 'netboot_xyz';
             $('#bootstrapBtn').prop('disabled', true);
             $('#bootstrapBtn_progress').addClass('fa fa-spinner fa-pulse');
             $('#bootstrapOutput').hide().text('');
-            ajaxCall(url = '/api/netboot/service/bootstrapNetbootXyz',
-                     sendData = {},
+            ajaxCall(url = '/api/netboot/service/bootstrap',
+                     sendData = {preset: preset},
                      callback = function (data) {
                          $('#bootstrapBtn').prop('disabled', false);
                          $('#bootstrapBtn_progress').removeClass('fa fa-spinner fa-pulse');
-                         if (data && data.output) {
-                             $('#bootstrapOutput').show().text(data.output);
+                         // Always show the captured output -- success and
+                         // failure both produce informative text. Color
+                         // the box red on failure so it's not mistaken for
+                         // a success line.
+                         var combined = '';
+                         if (data && data.output) { combined += data.output; }
+                         if (data && data.message) {
+                             combined += (combined ? '\n' : '') + data.message;
                          }
+                         if (!combined && data) {
+                             combined = JSON.stringify(data, null, 2);
+                         }
+                         var failed = !data || data.status !== 'ok';
+                         $('#bootstrapOutput')
+                             .css('color', failed ? '#a00' : '')
+                             .show()
+                             .text(combined || '(no output)');
                          loadDir(currentPath);
                      });
         });

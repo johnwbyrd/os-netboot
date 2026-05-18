@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# Plugin post-install hook (appended to the auto-generated +POST_INSTALL by
+# opnsense/plugins' Mk/plugins.mk via the scripts-post target). Runs once,
+# right after `pkg install`, before the user touches the GUI.
+#
+# Purpose: bring the plugin to a "first-run-ready" state so the Files page
+# and the Bootstrap netboot.xyz button work immediately, with no detour
+# through Services -> Netboot -> General -> Save just to create directories.
+#
+# What setup.sh does (idempotent):
+#   - creates the _netboot service user
+#   - mkdir -p /var/netboot, /var/db/netboot, /var/log/netboot, /var/etc/netboot
+#   - chown -R _netboot:_netboot on those
+#   - touches /var/db/netboot/authorized_keys so sshd_config can reference it
+#
+# We invoke the script directly (not via `configctl netboot setup`) because
+# at this point in the install lifecycle configd has not necessarily been
+# restarted to pick up our actions.d file yet. The script has no configctl
+# dependencies of its own and is safe to run standalone.
+if [ -x /usr/local/opnsense/scripts/netboot/setup.sh ]; then
+    /usr/local/opnsense/scripts/netboot/setup.sh || \
+        echo "os-netboot: setup.sh exited non-zero during post-install; you can re-run it from the GUI via Services -> Netboot -> General -> Save."
+fi
