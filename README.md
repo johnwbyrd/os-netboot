@@ -34,139 +34,178 @@ properly, and after install everything happens in the web GUI.
 ## Install
 
 `os-netboot` is distributed as a third-party OPNsense package repository.
-After a **one-time** two-command setup on each firewall, install, upgrade,
-and uninstall happen entirely in the OPNsense GUI — same UX as the official
-community plugins.  This is the same pattern used by other established
-third-party plugin repos like `mimugmail`'s.
+OPNsense has no GUI affordance for adding a custom repository, so the
+first install on each firewall requires **one shell session, three
+commands**.  After that, install / upgrade / uninstall all happen in the
+GUI exactly like the official community plugins — the third-party-repo
+plumbing is invisible from then on.
 
-### Step 1.  Add the repository (one time, on each firewall)
+This is the same install pattern other established third-party plugin
+repos use (e.g. `mimugmail`).
 
-You need a shell session on the OPNsense firewall just for this step.  Two
-paths:
+### Step 1.  Open a shell on the firewall (one time)
 
-**A. Console.**  Keyboard and monitor (or serial / IPMI / iLO) on the
-OPNsense box.  At the menu, press `8` then Enter.
+Two ways.  Pick whichever you have:
 
-**B. Temporarily enable SSH.**  In the OPNsense GUI: **System → Settings →
-Administration**.  Under "Secure Shell", check three boxes: **Enable Secure
-Shell**, **Permit root user login**, **Permit password login**.  Save.
-SSH in from a LAN computer as root.  **Disable these three boxes again
-after Step 1 finishes.**
+| Path | How |
+|---|---|
+| Console / serial / IPMI / iLO | At the OPNsense menu, press `8` then Enter. |
+| Temporary SSH | In the GUI: **System → Settings → Administration → Secure Shell**, check **Enable Secure Shell**, **Permit root user login**, **Permit password login**, Save. SSH in as `root` from a LAN box. **Uncheck the same three boxes when Step 2 finishes.** |
 
-Once you have a shell, run:
+### Step 2.  Register the repository and install the plugin
+
+At the shell:
 
 ```sh
 fetch -o /usr/local/etc/ssl/os-netboot.pub  https://johnwbyrd.github.io/os-netboot/os-netboot.pub
 fetch -o /usr/local/etc/pkg/repos/os-netboot.conf  https://johnwbyrd.github.io/os-netboot/os-netboot.conf
-pkg update -f
+configctl firmware install os-netboot
 ```
 
-Done.  You can log out of the shell and disable SSH again (Step 1B in
-reverse) if you enabled it.
+The first two `fetch`es drop a signed-repo descriptor and the matching
+public key into the FreeBSD pkg configuration.  The third command is
+OPNsense's plugin installer — it runs `pkg install`, then `register.php`
+to record `os-netboot` as a configured plugin, then runs the plugin's
+post-install hooks.  This is the same command path the GUI's **+**
+button uses.
 
-### Step 2.  Install in the GUI
+**Do not** use plain `pkg install os-netboot` from the shell.  Raw
+`pkg install` puts the files on disk but skips OPNsense's
+"configured plugins" tracking; the GUI then flags the plugin as
+`(misconfigured)` and won't let you manage it normally.  Always use
+`configctl firmware install <name>` from the shell.
 
-Navigate to **System → Firmware → Plugins**.  Enable **Show community
-plugins** (top-right checkbox).  Find `os-netboot` in the list and
-click the **+** icon next to it.
-
-That's the entire install.  No more shell.
+Log out of the shell now.  If you enabled SSH in Step 1, go disable it
+again.
 
 ### Step 3.  Configure
 
-In the GUI, navigate to **Services → Netboot → General**:
+Everything from here on is in the GUI.  Navigate to **Services → Netboot →
+General**:
 
 1. Check **Enable**.
 2. Pick **Listen interfaces** — typically your LAN.
-3. Leave the rest at defaults (`/var/netboot`, HTTP port 8069) unless you
-   have reason to change them.
+3. Leave the rest at defaults (`/var/netboot`, HTTP port 8069) unless
+   you have a specific reason to change them.
 4. Click **Save**.
 
-TFTP and HTTP start automatically.  Green status dots at the top of the
-Netboot page confirm.
+The Save handler creates the `_netboot` service user, makes the content
+root, renders the daemon configs, starts TFTP + HTTP (+ SFTP if you
+enabled it).  Status indicators at the top of the page go green for each
+running daemon.
 
-### Step 4.  Put files in (all GUI)
+### Step 4.  Put boot content in
 
-**Services → Netboot → Files**.  Three paths:
+**Services → Netboot → Files**.  Three input paths:
 
-- **Bootstrap netboot.xyz** (one click).  Fetches both the legacy-BIOS iPXE
-  binary (`netboot.xyz.kpxe`) **and** the UEFI x86_64 iPXE binary
-  (`netboot.xyz.efi`) from `boot.netboot.xyz` into the content root.  This
-  is what you want for the common case — your fleet has a mix of BIOS and
-  UEFI machines, and you want every one of them to be able to PXE-boot the
-  netboot.xyz menu without further configuration.  After clicking this
-  once, both boot types work; you don't pick one.
-- **Drag-and-drop upload.**
-- **Fetch from URL.**  Paste a link, the firewall pulls it server-side.
-  Useful for things outside the netboot.xyz tree (custom iPXE menus,
-  rescue images, Clonezilla, memtest, etc.)
+- **Bootstrap netboot.xyz** (one click).  Fetches both `netboot.xyz.kpxe`
+  (legacy BIOS) and `netboot.xyz.efi` (UEFI x86_64) from
+  `boot.netboot.xyz` into the content root.  This is what almost everyone
+  wants — your fleet has a mix of BIOS and UEFI machines, and clicking
+  this once makes every one of them able to PXE-boot the netboot.xyz
+  menu.  No firmware-type picking, no manual download-then-upload.
+- **Drag-and-drop upload.**  Standard browser file picker.
+- **Fetch from URL.**  Paste a URL, the firewall pulls the file
+  server-side.  Useful for content outside the netboot.xyz tree —
+  custom iPXE menus, rescue images, Clonezilla, memtest, etc.
 
-### Step 5 (optional).  Auto-wire Dnsmasq DHCP boot entries
+### Step 5 (optional).  Auto-wire DHCP boot entries
 
-If your LAN runs OPNsense's built-in Dnsmasq DNS/DHCP, click **Wire up DHCP
-boot entries** on the Netboot settings page.  It creates BIOS and UEFI
-arch-aware boot tags and file entries automatically.
+If your LAN runs OPNsense's built-in Dnsmasq DNS/DHCP, click **Wire up
+DHCP boot entries** on the Netboot settings page.  This creates BIOS and
+UEFI x86_64 boot entries in Dnsmasq, with the arch-aware DHCP option 93
+tags, pointing at the Netboot listen IP.  PXE clients then get the right
+file served automatically.
+
+If you run a different DHCP server, you'll wire it up yourself, in your
+DHCP server's own config: tell it to advertise `next-server <Netboot
+IP>` and a per-arch `bootfile-name` (`netboot.xyz.kpxe` for arch 0
+legacy BIOS, `netboot.xyz.efi` for arch 7 / 9 UEFI x86_64).
 
 ### Step 6 (optional).  SFTP ingress for power users
 
-**Services → Netboot → General → SFTP** section:
+If you'd rather push content in over SFTP (e.g. to `rsync` a large image
+collection) than via the web upload form:
 
-1. Check **Enable SFTP ingress**.
-2. Paste your SSH **public key(s)** into the Authorized Keys field, one
-   per line.
-3. (Optional) Change the SFTP port — default 2069, *not* 22.
+1. **Services → Netboot → General → SFTP**, check **Enable SFTP
+   ingress**.
+2. Paste your SSH **public** key(s) into Authorized Keys, one per line.
+3. Leave the SFTP port at 2069 (it must NOT be 22; that's your
+   management SSH).
 4. Save.
 
-Then from any machine with the matching private key:
+Then from any client with the matching private key:
 
 ```sh
 sftp -P 2069 _netboot@<OPNsense IP>
 ```
 
-You'll land chrooted in the content root.
+You'll land chrooted in the content root.  The SFTP user is a separate
+system account with no shell, no password, and no access outside the
+content root.
 
 ---
 
 ## Upgrade and uninstall
 
-Both are GUI operations, just like the install.
+| Action | GUI path | Shell equivalent |
+|---|---|---|
+| Upgrade | **System → Firmware → Plugins** → upgrade arrow next to `os-netboot` | `configctl firmware update os-netboot` |
+| Uninstall the plugin | **System → Firmware → Plugins** → trash icon next to `os-netboot` | `configctl firmware remove os-netboot` |
+| Remove the repo entirely | n/a (must use shell) | `rm /usr/local/etc/pkg/repos/os-netboot.conf /usr/local/etc/ssl/os-netboot.pub && pkg update -f` |
 
-- **Upgrade.**  **System → Firmware → Plugins** — when a newer version of
-  `os-netboot` is in the repo, the **+** icon is replaced by an
-  upgrade arrow.  Click it.  Or use the global **System → Firmware →
-  Status → Check for updates** which includes plugins.
-- **Uninstall.**  **System → Firmware → Plugins** — click the trash icon
-  next to `os-netboot`.  Your content (`/var/netboot`) and settings
-  (`config.xml` netboot section) are preserved.  Re-install picks up where
-  you left off.
-
-To **remove the repository itself** (e.g. uninstalling everything from
-this maintainer), shell back in and delete the two files Step 1 dropped:
+Uninstall preserves your content (`/var/netboot`), your support
+directories (`/var/db/netboot`, `/var/log/netboot`), and your plugin
+settings (the `<netboot>` section of `config.xml`).  Reinstall picks up
+where you left off.  To wipe completely, shell in and:
 
 ```sh
-rm /usr/local/etc/pkg/repos/os-netboot.conf
-rm /usr/local/etc/ssl/os-netboot.pub
-pkg update -f
+rm -rf /var/netboot /var/db/netboot /var/log/netboot
 ```
+
+and edit out the `<netboot>` block from `config.xml` (**System →
+Configuration → Backups → Download**, edit, **Restore**).
 
 ---
 
 ## Troubleshooting
 
-- **Plugin doesn't appear in the list.**  Make sure "Show community plugins"
-  is checked.  If still missing: shell in, run `pkg update -f` and check
-  there are no errors mentioning `os-netboot.pub` (wrong key path) or
-  `signature_type` (mismatched signature config).
-- **Service won't start.**  System → Log Files → General — search for
-  `netboot_`.  Most common cause is a stale rendered config; click Save
-  again on the Netboot General page to re-render templates.
-- **Clients don't PXE boot.**  From a client on the same network as the
-  listen interface: `tftp <netboot-ip>` then `get netboot.xyz.kpxe`.  If
-  that times out, check the listen interface and that the firewall rules
-  added by Netboot are present and green.  If TFTP succeeds, the issue is
-  DHCP-side: verify DHCP boot entries point at the Netboot listen IP.
-- **Upload fails with permission denied.**  At shell:
-  `chown -R _netboot:_netboot /var/netboot`.
+- **Plugin shows `(misconfigured)` in the plugin list.**  You installed
+  via raw `pkg install` instead of `configctl firmware install`.  Fix
+  without reinstalling:
+  ```sh
+  /usr/local/opnsense/scripts/firmware/register.php install os-netboot
+  ```
+  Then refresh the Plugins page.
+- **Plugin doesn't appear in the list.**  Check "Show community plugins"
+  (top-right of the Plugins table).  If still missing: shell in and run
+  `pkg update -f`, watch for errors mentioning `os-netboot.pub` (wrong
+  key location) or signature validation.
+- **`pkg update -f` says "No signature found in the repository".**  The
+  pubkey at `/usr/local/etc/ssl/os-netboot.pub` is stale — re-fetch it
+  with the Step 2 first command and retry.  This can happen after the
+  upstream signing key rotates.
+- **Services don't start after Save.**  **System → Log Files → General**,
+  filter on `netboot_`.  Most common cause is a stale rendered config
+  after a Netboot version bump — click Save again on the General page to
+  re-render templates.
+- **Clients don't PXE boot.**  From any machine on the LAN:
+  ```sh
+  tftp <Netboot IP>
+  tftp> get netboot.xyz.kpxe
+  tftp> quit
+  ```
+  If TFTP times out: the listen interface is wrong, or your firewall is
+  blocking UDP/69 (the auto-rules should cover this, but custom rules
+  ordered first can override).  If TFTP works but a real PXE client
+  still doesn't boot: the DHCP server isn't advertising `next-server` +
+  `bootfile-name`.  Verify the Dnsmasq DHCP boot entries on
+  **Services → Dnsmasq DNS & DHCP → DHCP boot**.
+- **Upload fails with permission denied.**  Content root ownership
+  drifted.  At the shell:
+  ```sh
+  chown -R _netboot:_netboot /var/netboot
+  ```
 
 ---
 
