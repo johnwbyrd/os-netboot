@@ -92,8 +92,16 @@ jobs:
             # Upgrading aligns libpcre2 (and anything else the new php
             # transitively depends on) before the php install lands.
             pkg upgrade -y
-            pkg install -y git php83 php83-tokenizer php83-xml php83-dom
+            # python3 is needed only to silence opnsense-plugins'
+            # defaults.mk warning "Cannot build without PLUGIN_PYTHON set"
+            # -- the Mk machinery probes /usr/local/bin/python3 to derive
+            # a PLUGIN_PYTHON suffix for replacing %%PYTHON_VER%% in any
+            # plugin files. We don't use that replacement (no Python in
+            # this plugin) but installing python3 lets defaults.mk compute
+            # the value cleanly instead of falling through to the warning.
+            pkg install -y git php83 php83-tokenizer php83-xml php83-dom python3
             php -v
+            python3 -V
           envs: 'PKG_SIGNING_KEY GH_RUN_NUMBER'
           run: |
             # SECURITY: capture the signing secret to a tmpfile and drop
@@ -130,6 +138,21 @@ jobs:
             set -x
 
             WORKDIR=$(pwd)
+
+            # vmactions/freebsd-vm mounts the host workspace into the VM
+            # but the host workspace is owned by uid 1001 on the runner
+            # while the VM commands run as root. Modern git refuses to
+            # operate on a repo owned by a different uid and prints
+            # "fatal: detected dubious ownership in repository". That
+            # makes opnsense/plugins' Scripts/version.sh (which calls
+            # `git describe` to embed an upstream-version hash in the
+            # generated pkg-plist annotation) return non-zero, leaving
+            # product_hash empty in the +MANIFEST metadata. Mark every
+            # checkout under WORKDIR as safe to defuse this.
+            git config --global --add safe.directory "${WORKDIR}/opnsense-plugins"
+            git config --global --add safe.directory "${WORKDIR}/os-netboot"
+            git config --global --add safe.directory "${WORKDIR}/core"
+
             cd "${WORKDIR}/opnsense-plugins/ftp/netboot"
 
             # Strict OPNsense lint. Surfaces model-XML convention violations,
@@ -262,7 +285,7 @@ jobs:
               <li>On your OPNsense shell: <code>fetch -o /usr/local/etc/ssl/os-netboot.pub https://johnwbyrd.github.io/os-netboot/os-netboot.pub</code></li>
               <li><code>fetch -o /usr/local/etc/pkg/repos/os-netboot.conf https://johnwbyrd.github.io/os-netboot/os-netboot.conf</code></li>
               <li><code>pkg update -f</code></li>
-              <li>System &rarr; Firmware &rarr; Plugins &rarr; show community plugins &rarr; install <code>os-netboot-devel</code></li>
+              <li>On your OPNsense shell: <code>configctl firmware install os-netboot</code></li>
             </ol>
             <h2>Files served from this site</h2>
             <ul>
