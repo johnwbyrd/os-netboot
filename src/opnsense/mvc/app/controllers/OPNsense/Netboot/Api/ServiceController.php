@@ -175,14 +175,58 @@ class ServiceController extends ApiMutableServiceControllerBase
             ];
         }
 
-        // Try running a short configd action and capture whatever comes
-        // back. This is the same path Bootstrap takes; if it returns
-        // empty here too the problem is in configd <-> script execution,
-        // not in our PHP code.
+        // Probe A: configd -> setup.sh. Setup is fast and exits 0 reliably,
+        // so this isolates the configd <-> script path from any fetch /
+        // network behavior.
         $backend = new Backend();
         $probe   = $backend->configdRun('netboot setup');
         $result['probe.setup_output'] = (string)$probe;
         $result['probe.setup_output_len'] = strlen((string)$probe);
+
+        // Probe B: configd -> bootstrap.sh netboot_xyz. This is the call
+        // the GUI Bootstrap button makes. If it returns empty AND probe A
+        // returned non-empty, we know configd works but bootstrap is
+        // failing or hanging or exiting non-zero -- specifically separated
+        // from "configd is broken" as a cause.
+        $probeBoot = $backend->configdRun('netboot bootstrap netboot_xyz');
+        $result['probe.bootstrap_output'] = (string)$probeBoot;
+        $result['probe.bootstrap_output_len'] = strlen((string)$probeBoot);
+
+        // Probe C: bypass configd entirely. proc_open lets us capture
+        // stdout, stderr, and exit code separately -- impossible via
+        // configd's wire protocol. Definitively answers "does the script
+        // run, what does it print to each stream, and what exit code".
+        $cmd = $paths['scripts.bootstrap'] . ' netboot_xyz';
+        $desc = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $pipes = [];
+        $proc = @proc_open($cmd, $desc, $pipes);
+        if (is_resource($proc)) {
+            fclose($pipes[0]);
+            $stdout = stream_get_contents($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $exitCode = proc_close($proc);
+            $result['probe.direct_exec'] = [
+                'cmd'         => $cmd,
+                'exit_code'   => $exitCode,
+                'stdout_len'  => strlen((string)$stdout),
+                'stderr_len'  => strlen((string)$stderr),
+                // Truncate so the response stays small even if curl/fetch
+                // dumped a lot of TLS chatter.
+                'stdout'      => substr((string)$stdout, 0, 2000),
+                'stderr'      => substr((string)$stderr, 0, 2000),
+            ];
+        } else {
+            $result['probe.direct_exec'] = [
+                'cmd'   => $cmd,
+                'error' => 'proc_open returned false (PHP cannot exec the script -- safe_mode? open_basedir? perms on www user?)',
+            ];
+        }
 
         // Read the version file directly so we can confirm which build is
         // actually on the box.
