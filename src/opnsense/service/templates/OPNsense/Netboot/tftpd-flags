@@ -9,5 +9,18 @@
     -u USR drop privileges to USR
     -p     permit only IPv4 (we omit this; we want dual-stack)
     -a A:P bind to specific address:port (we omit; bind to all, gate via firewall)
+
+  This template must render even when the plugin is installed but not yet
+  configured (i.e., no <netboot> section in config.xml). Without the
+  helpers.exists guard, Jinja2's StrictUndefined raises on OPNsense.netboot
+  before the default filter can fire, which fails the post-install template
+  reload with 'collections.OrderedDict object has no attribute netboot'. The
+  rendered file is harmless in that pre-config state since the rc.d wrapper
+  only starts the daemon when general.enabled = 1 anyway.
 -#}
--L -s {{ OPNsense.netboot.general.content_root | default('/var/netboot') }} -u nobody
+{%- if helpers.exists('OPNsense.netboot.general.content_root') -%}
+{%-   set content_root = OPNsense.netboot.general.content_root -%}
+{%- else -%}
+{%-   set content_root = '/var/netboot' -%}
+{%- endif -%}
+-L -s {{ content_root }} -u nobody
