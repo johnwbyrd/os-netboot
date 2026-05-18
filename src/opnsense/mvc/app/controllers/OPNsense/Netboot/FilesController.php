@@ -17,8 +17,11 @@ use OPNsense\Base\IndexController;
  *   - POST   /api/netboot/files/delete
  *   - POST   /api/netboot/files/mkdir
  *   - POST   /api/netboot/files/fetch_url
- *   - POST   /api/netboot/files/bootstrap_netboot_xyz
  *   - GET    /api/netboot/files/download?path=...
+ *
+ * The Bootstrap-presets endpoints live on the Service controller:
+ *   - GET    /api/netboot/service/bootstrap_presets
+ *   - POST   /api/netboot/service/bootstrap   {preset: "netboot_xyz" | "ipxe"}
  */
 class FilesController extends IndexController
 {

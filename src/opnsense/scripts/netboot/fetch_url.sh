@@ -12,9 +12,10 @@
 #   - verify the resolved destination stays inside the content root
 #   - download to a tempfile in the same directory, then atomic-rename
 #
-# A separate bootstrap_netboot_xyz.sh handles the "fetch both netboot.xyz
-# binaries" one-click case so that flow stays simple and doesn't have to
-# go through this generic path.
+# A separate bootstrap.sh handles the curated one-click "fetch both BIOS
+# and UEFI iPXE binaries from preset X" case (netboot.xyz, stock iPXE,
+# etc.) so that flow stays simple and doesn't have to go through this
+# generic path.
 
 set -eu
 

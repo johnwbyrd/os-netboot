@@ -13,7 +13,9 @@ use OPNsense\Core\Backend;
  *   POST /api/netboot/service/restart         -> restartAction
  *   GET  /api/netboot/service/status          -> statusAction
  *   POST /api/netboot/service/reconfigure     -> reconfigureAction
- *   POST /api/netboot/service/bootstrap_netboot_xyz
+ *   GET  /api/netboot/service/bootstrap_presets   -> bootstrapPresetsAction (catalog of presets)
+ *   POST /api/netboot/service/bootstrap           -> bootstrapAction       ({preset: "..."})
+ *   POST /api/netboot/service/bootstrap_netboot_xyz                        (legacy alias)
  *
  * 'reconfigure' is the canonical OPNsense pattern for "user clicked Save":
  *   1. render templates from the freshly-saved model
@@ -118,7 +120,7 @@ class ServiceController extends ApiMutableServiceControllerBase
      * script then translates into upstream URLs and on-disk filenames.
      *
      * Adding a preset here is a two-line change:
-     *   1) add the case to scripts/netboot/bootstrap_netboot_xyz.sh
+     *   1) add the case to scripts/netboot/bootstrap.sh
      *   2) add the row here
      * No GUI change needed -- the Files page reads this list at load time
      * to render the dropdown.

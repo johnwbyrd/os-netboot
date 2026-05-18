@@ -105,9 +105,12 @@ fixture `config.xml` and asserts side-effects:
 - `setup.sh` -- after running, `_netboot` user exists, `/var/netboot/`
   exists with correct mode and ownership, idempotent (run twice, no
   errors).
-- `bootstrap_netboot_xyz.sh` -- mock `fetch` to a local HTTP server
-  serving canned `netboot.xyz.{kpxe,efi}` files; verify they end up in
-  the configured content root with correct perms.
+- `bootstrap.sh` -- run with each preset (`netboot_xyz`, `ipxe`, plus
+  an unknown preset to verify rejection), mock `fetch` to a local HTTP
+  server serving canned BIOS/UEFI binaries; verify the right pair lands
+  in the configured content root with the right local filenames and
+  perms. Verify the script self-heals when `_netboot` or the content
+  root are missing (calls `setup.sh` first).
 - `fetch_url.sh` -- pass `..`-containing paths, verify rejection; pass
   empty URL; pass `ftp://...`; pass legitimate URL; assert each case.
 

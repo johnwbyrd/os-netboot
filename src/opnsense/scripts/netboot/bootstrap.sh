@@ -47,7 +47,7 @@ case "${PRESET}" in
     *)
         echo "ERROR: unknown bootstrap preset '${PRESET}'." >&2
         echo "       Expected one of: netboot_xyz, ipxe." >&2
-        echo "       To add a new preset, edit /usr/local/opnsense/scripts/netboot/bootstrap_netboot_xyz.sh" >&2
+        echo "       To add a new preset, edit /usr/local/opnsense/scripts/netboot/bootstrap.sh" >&2
         echo "       and the matching case in the GUI Quick start menu." >&2
         exit 64   # EX_USAGE
         ;;
