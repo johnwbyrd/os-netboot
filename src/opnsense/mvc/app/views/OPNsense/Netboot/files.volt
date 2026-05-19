@@ -261,6 +261,48 @@
             $('#bootstrapPresetDescription').text(info ? info.description : '');
         });
 
+        // Render the per-file array returned by /api/netboot/service/bootstrap.
+        // The API gives us one entry per fetched URL with ok / bytes / error /
+        // http_code, so we can show "BIOS succeeded, UEFI failed because TLS
+        // verify error" rather than collapsing to a single ok/failed line.
+        function formatBootstrapResult(data) {
+            if (!data) {
+                return '(no response from bootstrap endpoint)';
+            }
+            if (data.message && !data.files) {
+                // Pre-fetch validation error (unknown preset, content root
+                // not writable, etc). No per-file detail to render.
+                return data.message;
+            }
+            var lines = [];
+            if (data.preset) {
+                lines.push('Preset: ' + data.preset);
+                lines.push('');
+            }
+            $.each(data.files || [], function (_i, f) {
+                var marker = f.ok ? 'OK    ' : 'FAILED';
+                var head = marker + '  ' + f.name + '   <- ' + f.url;
+                lines.push(head);
+                if (f.ok) {
+                    lines.push('         wrote ' + f.bytes + ' bytes (HTTP ' + f.http_code + ')');
+                } else {
+                    if (f.http_code) {
+                        lines.push('         HTTP ' + f.http_code);
+                    }
+                    if (f.errno) {
+                        lines.push('         curl errno: ' + f.errno);
+                    }
+                    if (f.error) {
+                        // Wrap a long error message at ~78 cols for readability
+                        // in the fixed-width pre.
+                        lines.push('         ' + f.error.replace(/(.{78,}?\s)/g, '$1\n         '));
+                    }
+                }
+                lines.push('');
+            });
+            return lines.join('\n').replace(/\n$/, '');
+        }
+
         $('#bootstrapBtn').click(function () {
             var preset = $('#bootstrapPreset').val() || 'netboot_xyz';
             $('#bootstrapBtn').prop('disabled', true);
@@ -271,23 +313,11 @@
                      callback = function (data) {
                          $('#bootstrapBtn').prop('disabled', false);
                          $('#bootstrapBtn_progress').removeClass('fa fa-spinner fa-pulse');
-                         // Always show the captured output -- success and
-                         // failure both produce informative text. Color
-                         // the box red on failure so it's not mistaken for
-                         // a success line.
-                         var combined = '';
-                         if (data && data.output) { combined += data.output; }
-                         if (data && data.message) {
-                             combined += (combined ? '\n' : '') + data.message;
-                         }
-                         if (!combined && data) {
-                             combined = JSON.stringify(data, null, 2);
-                         }
                          var failed = !data || data.status !== 'ok';
                          $('#bootstrapOutput')
                              .css('color', failed ? '#a00' : '')
                              .show()
-                             .text(combined || '(no output)');
+                             .text(formatBootstrapResult(data));
                          loadDir(currentPath);
                      });
         });

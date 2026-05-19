@@ -4,6 +4,7 @@ namespace OPNsense\Netboot\Api;
 
 use OPNsense\Base\ApiMutableServiceControllerBase;
 use OPNsense\Core\Backend;
+use OPNsense\Netboot\HttpFetcher;
 
 /**
  * Service control endpoints for the three Netboot daemons.
@@ -16,6 +17,11 @@ use OPNsense\Core\Backend;
  *   GET  /api/netboot/service/bootstrap_presets   -> bootstrapPresetsAction (catalog of presets)
  *   POST /api/netboot/service/bootstrap           -> bootstrapAction       ({preset: "..."})
  *   POST /api/netboot/service/bootstrap_netboot_xyz                        (legacy alias)
+ *
+ * Bootstrap is implemented in PHP using the audited libcurl wrapper at
+ * mvc/app/library/OPNsense/Netboot/HttpFetcher.php. No shell, no configd
+ * action -- the privileged step is the one-time setgid directory setup
+ * by setup.sh, not each individual fetch.
  *
  * 'reconfigure' is the canonical OPNsense pattern for "user clicked Save":
  *   1. render templates from the freshly-saved model
@@ -115,24 +121,37 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
-     * Catalog of one-click iPXE bootstrap presets the GUI can fetch. The
-     * key is what we pass to `configctl netboot bootstrap <key>`, which the
-     * script then translates into upstream URLs and on-disk filenames.
+     * Catalog of one-click iPXE bootstrap presets the GUI can fetch.
+     * Server-defined so the URLs aren't user-controllable (no SSRF
+     * surface at this entry point -- see HttpFetcher::rejectInternalAddress
+     * which is only called for FilesController::fetchUrl).
      *
-     * Adding a preset here is a two-line change:
-     *   1) add the case to scripts/netboot/bootstrap.sh
-     *   2) add the row here
-     * No GUI change needed -- the Files page reads this list at load time
-     * to render the dropdown.
+     * Each entry's 'files' is a list of (remote_url, local_name) pairs.
+     * remote_url is fetched verbatim with the hardened HttpFetcher; the
+     * local_name is the filename the binary lands under in the content
+     * root. local_name is constrained by PathResolver::isSafeName when
+     * we run the fetch.
+     *
+     * Adding a preset is a single-file edit here. The GUI dropdown is
+     * populated from this list via /api/netboot/service/bootstrap_presets,
+     * so no JS change is needed.
      */
     private static $bootstrapPresets = [
         'netboot_xyz' => [
             'label' => 'netboot.xyz (recommended)',
             'description' => 'Fetches netboot.xyz.kpxe (BIOS) and netboot.xyz.efi (UEFI). At PXE boot, chains to the public netboot.xyz menu -- OS installers, rescue tools, memtest. Requires WAN connectivity from your PXE clients at boot time.',
+            'files' => [
+                ['https://boot.netboot.xyz/ipxe/netboot.xyz.kpxe', 'netboot.xyz.kpxe'],
+                ['https://boot.netboot.xyz/ipxe/netboot.xyz.efi',  'netboot.xyz.efi'],
+            ],
         ],
         'ipxe' => [
             'label' => 'Stock iPXE (advanced)',
             'description' => 'Fetches undionly.kpxe and ipxe.efi from boot.ipxe.org, saved locally as ipxe.kpxe / ipxe.efi. These drop to the iPXE shell at boot; pair with your own menu.ipxe in the content root if you want a menu. For users who don\'t want to depend on netboot.xyz at boot time.',
+            'files' => [
+                ['https://boot.ipxe.org/undionly.kpxe', 'ipxe.kpxe'],
+                ['https://boot.ipxe.org/ipxe.efi',     'ipxe.efi'],
+            ],
         ],
     ];
 
@@ -147,105 +166,25 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
-     * GET /api/netboot/service/diag
-     * Self-check: confirm the on-disk files this controller and its
-     * configd actions depend on. Exists specifically so we don't have to
-     * shell into the box to answer "is the right pkg installed and did
-     * its files get extracted properly?" -- the GUI can call this and
-     * show a yes/no table. Kept intentionally trivial: no side effects,
-     * no privileged data, just stat() on a handful of known paths.
-     */
-    public function diagAction()
-    {
-        $paths = [
-            'scripts.setup'         => '/usr/local/opnsense/scripts/netboot/setup.sh',
-            'scripts.bootstrap'     => '/usr/local/opnsense/scripts/netboot/bootstrap.sh',
-            'scripts.fetch_url'     => '/usr/local/opnsense/scripts/netboot/fetch_url.sh',
-            'actions.netboot'       => '/usr/local/opnsense/service/conf/actions.d/actions_netboot.conf',
-            'plugin.version'        => '/usr/local/opnsense/version/netboot',
-        ];
-        $result = [];
-        foreach ($paths as $key => $p) {
-            $result[$key] = [
-                'path'       => $p,
-                'exists'     => file_exists($p),
-                'is_file'    => is_file($p),
-                'executable' => is_executable($p),
-                'size'       => file_exists($p) ? filesize($p) : null,
-            ];
-        }
-
-        // Probe A: configd -> setup.sh. Setup is fast and exits 0 reliably,
-        // so this isolates the configd <-> script path from any fetch /
-        // network behavior.
-        $backend = new Backend();
-        $probe   = $backend->configdRun('netboot setup');
-        $result['probe.setup_output'] = (string)$probe;
-        $result['probe.setup_output_len'] = strlen((string)$probe);
-
-        // Probe B: configd -> bootstrap.sh netboot_xyz. This is the call
-        // the GUI Bootstrap button makes. If it returns empty AND probe A
-        // returned non-empty, we know configd works but bootstrap is
-        // failing or hanging or exiting non-zero -- specifically separated
-        // from "configd is broken" as a cause.
-        $probeBoot = $backend->configdRun('netboot bootstrap netboot_xyz');
-        $result['probe.bootstrap_output'] = (string)$probeBoot;
-        $result['probe.bootstrap_output_len'] = strlen((string)$probeBoot);
-
-        // Probe C: bypass configd entirely. proc_open lets us capture
-        // stdout, stderr, and exit code separately -- impossible via
-        // configd's wire protocol. Definitively answers "does the script
-        // run, what does it print to each stream, and what exit code".
-        $cmd = $paths['scripts.bootstrap'] . ' netboot_xyz';
-        $desc = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
-        $pipes = [];
-        $proc = @proc_open($cmd, $desc, $pipes);
-        if (is_resource($proc)) {
-            fclose($pipes[0]);
-            $stdout = stream_get_contents($pipes[1]);
-            $stderr = stream_get_contents($pipes[2]);
-            fclose($pipes[1]);
-            fclose($pipes[2]);
-            $exitCode = proc_close($proc);
-            $result['probe.direct_exec'] = [
-                'cmd'         => $cmd,
-                'exit_code'   => $exitCode,
-                'stdout_len'  => strlen((string)$stdout),
-                'stderr_len'  => strlen((string)$stderr),
-                // Truncate so the response stays small even if curl/fetch
-                // dumped a lot of TLS chatter.
-                'stdout'      => substr((string)$stdout, 0, 2000),
-                'stderr'      => substr((string)$stderr, 0, 2000),
-            ];
-        } else {
-            $result['probe.direct_exec'] = [
-                'cmd'   => $cmd,
-                'error' => 'proc_open returned false (PHP cannot exec the script -- safe_mode? open_basedir? perms on www user?)',
-            ];
-        }
-
-        // Read the version file directly so we can confirm which build is
-        // actually on the box.
-        $result['plugin.version_content'] = file_exists($paths['plugin.version'])
-            ? trim((string)file_get_contents($paths['plugin.version']))
-            : null;
-
-        return ['status' => 'ok', 'diag' => $result];
-    }
-
-    /**
      * Server-side fetch of an iPXE bootstrap preset (BIOS .kpxe + UEFI .efi)
      * into the content root. Idempotent -- safe to re-run to refresh after
      * the upstream publishes a new build.
      *
      * POST /api/netboot/service/bootstrap   {"preset": "netboot_xyz"}
      *
-     * The legacy bootstrap_netboot_xyz endpoint stays as a thin alias for
-     * older URLs that may be cached in browser histories.
+     * Implementation: hardened PHP libcurl via OPNsense\Netboot\HttpFetcher.
+     * No shell, no configd action -- the previous shell+configd path lost
+     * exit codes through configd's lossy script_output protocol and was
+     * also four parsers deep (PHP -> escapeshellarg -> configd shlex ->
+     * subprocess shell -> fetch(1)) for the URL string. PHP libcurl is a
+     * single C-string call with real return values and is the same
+     * library OPNsense's own firmware updater uses.
+     *
+     * Why this is allowed to write to /var/netboot without configd:
+     * setup.sh makes the content root mode 02775 (setgid) with group
+     * _netboot and owner www. PHP-written files inherit the _netboot
+     * group; mode 0644 by default; daemons keep their accustomed read
+     * access. See setup.sh for the longer rationale.
      */
     public function bootstrapAction()
     {
@@ -253,7 +192,7 @@ class ServiceController extends ApiMutableServiceControllerBase
             return [
                 'status'  => 'failed',
                 'message' => sprintf(
-                    gettext('The "bootstrap" action requires POST. Received %s. This action fetches files from the internet and writes them into the content root, so it is intentionally not exposed as a GET. Have the GUI call $.post(...) or use -X POST with curl.'),
+                    gettext('The "bootstrap" action requires POST. Received %s. This action writes files into the content root and reaches out to the internet, so it is intentionally not exposed as a GET. Have the GUI call $.post(...) or use -X POST with curl.'),
                     $this->request->getMethod()
                 ),
             ];
@@ -262,64 +201,8 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
-     * Shared implementation of bootstrapAction / bootstrapNetbootXyzAction.
-     * Validates the preset, runs setup (idempotent), runs the bootstrap
-     * script, returns a result envelope with the captured output and a
-     * meaningful status/message on failure.
-     */
-    private function runBootstrap($preset)
-    {
-        if (!array_key_exists($preset, self::$bootstrapPresets)) {
-            return [
-                'status'  => 'failed',
-                'message' => sprintf(
-                    gettext('Unknown bootstrap preset "%s". Expected one of: %s. The GUI Quick start menu and Api/ServiceController.php::$bootstrapPresets must list the same keys; if you reached this from the GUI, your browser may be running cached JS -- hard-reload (Ctrl-Shift-R) and try again.'),
-                    $preset,
-                    implode(', ', array_keys(self::$bootstrapPresets))
-                ),
-            ];
-        }
-
-        $backend = new Backend();
-
-        // Belt-and-suspenders: setup is also auto-run on plugin install
-        // (+POST_INSTALL.post) and on reconfigure, but if someone has
-        // managed to delete the content root or the service user out from
-        // under us, do it again here so the next call to fetch doesn't
-        // explode on a missing chown target.
-        $backend->configdRun('netboot setup');
-
-        // configdRun returns the script's combined stdout/stderr as a
-        // string. An empty string means the script exited 0 with no
-        // output (unusual) or that configd couldn't run it at all (more
-        // likely on a broken install). Either way the GUI should surface
-        // that rather than claiming success.
-        $output = $backend->configdRun('netboot bootstrap ' . escapeshellarg($preset));
-        if (trim((string)$output) === '') {
-            return [
-                'status'  => 'failed',
-                'output'  => '',
-                'message' => sprintf(
-                    gettext('The bootstrap script for preset "%s" produced no output. Expected progress lines (Fetching ..., -> /var/netboot/...). Likely causes: configd cannot exec the script (check /var/log/configd.log), the action is not yet registered (re-run "configctl template reload OPNsense/Netboot" or restart configd), or the script crashed before its first echo. Check /var/log/configd.log on the firewall.'),
-                    $preset
-                ),
-            ];
-        }
-
-        // Heuristic: the success path ends with "Done. ..." on stdout. Any
-        // "ERROR:" line means the script failed somewhere even though
-        // configd captured the message.
-        $failed = (strpos($output, "ERROR:") !== false);
-        return [
-            'status' => $failed ? 'failed' : 'ok',
-            'output' => $output,
-            'preset' => $preset,
-        ];
-    }
-
-    /**
-     * Backwards-compatible alias for the old single-preset endpoint.
-     * Equivalent to POST /api/netboot/service/bootstrap with preset=netboot_xyz.
+     * Backwards-compatible alias for the old single-preset endpoint, kept
+     * because earlier docs and browser histories may still reference it.
      */
     public function bootstrapNetbootXyzAction()
     {
@@ -333,5 +216,142 @@ class ServiceController extends ApiMutableServiceControllerBase
             ];
         }
         return $this->runBootstrap('netboot_xyz');
+    }
+
+    /**
+     * Shared implementation of bootstrap* actions.
+     *
+     * Looks up the preset, ensures the content root exists, then drives
+     * HttpFetcher for each (URL, local-name) pair in the preset. Returns
+     * one result entry per file so the GUI can show per-file success/
+     * failure rather than collapsing to a single ok/failed verdict.
+     *
+     * Per-file failures DO NOT abort the run -- if the BIOS binary
+     * downloads but the UEFI one fails, the BIOS file stays in place
+     * and the result envelope reports exactly that. The GUI colors the
+     * output box red if any file failed.
+     */
+    private function runBootstrap($preset)
+    {
+        if (!array_key_exists($preset, self::$bootstrapPresets)) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Unknown bootstrap preset "%s". Expected one of: %s. The GUI Quick start dropdown is populated from /api/netboot/service/bootstrap_presets; if you reached this from the GUI, your browser may be running cached JS -- hard-reload (Ctrl-Shift-R) and try again.'),
+                    $preset,
+                    implode(', ', array_keys(self::$bootstrapPresets))
+                ),
+            ];
+        }
+
+        // Read content root from the saved model (default /var/netboot).
+        // Resolve to an absolute realpath so we can sanity-check that the
+        // assembled file paths stay inside it.
+        $model = $this->getModel();
+        $contentRoot = '';
+        if (isset($model->general->content_root)) {
+            $contentRoot = (string)$model->general->content_root;
+        }
+        if ($contentRoot === '') {
+            $contentRoot = '/var/netboot';
+        }
+
+        // Belt-and-suspenders: setup is also wired into +POST_INSTALL.post
+        // and runs on every reconfigureAction, but if someone has
+        // managed to wipe the content root out from under us we'd rather
+        // self-heal than fail on a "destination not writable" error
+        // from HttpFetcher. configd setup is fast and idempotent.
+        if (!is_dir($contentRoot) || !is_writable($contentRoot)) {
+            (new Backend())->configdRun('netboot setup');
+        }
+
+        $realRoot = realpath($contentRoot);
+        if ($realRoot === false || !is_dir($realRoot)) {
+            return [
+                'status'  => 'failed',
+                'message' => sprintf(
+                    gettext('Content root "%s" does not resolve to an existing directory. Expected: an absolute directory path that setup.sh has created (or is willing to create) and made writable by the webGUI user. Open Services -> Netboot -> General and Save.'),
+                    $contentRoot
+                ),
+            ];
+        }
+
+        $fetcher = new HttpFetcher();
+        $files   = [];
+        $anyFailed = false;
+
+        foreach (self::$bootstrapPresets[$preset]['files'] as $pair) {
+            list($url, $localName) = $pair;
+            // Defensive: the local_name is server-defined here but the
+            // realpath check below catches any future bug that lets a
+            // ../ in.
+            $dest = $realRoot . DIRECTORY_SEPARATOR . $localName;
+            $destReal = $this->confineToRoot($dest, $realRoot);
+            if ($destReal === null) {
+                $files[] = [
+                    'url'   => $url,
+                    'name'  => $localName,
+                    'ok'    => false,
+                    'error' => sprintf(
+                        gettext('Refusing to write "%s": resolved destination falls outside the content root "%s". This is an internal error -- the preset definition contains a path with ".." or an absolute component.'),
+                        $localName,
+                        $realRoot
+                    ),
+                ];
+                $anyFailed = true;
+                continue;
+            }
+
+            // No SSRF check on the bootstrap path -- the URL list is a
+            // server-side constant. Public hosts (boot.netboot.xyz,
+            // boot.ipxe.org) are explicitly safe and don't need the
+            // dns_get_record dance, which would just slow this down.
+            $res = $fetcher->fetch($url, $destReal, ['enforce_safe_url' => false]);
+            $files[] = [
+                'url'       => $res['url'],
+                'name'      => $localName,
+                'dest'      => $res['dest'],
+                'ok'        => $res['ok'],
+                'bytes'     => $res['bytes'],
+                'http_code' => $res['http_code'],
+                'errno'     => $res['errno'],
+                'error'     => $res['error'],
+            ];
+            if (!$res['ok']) {
+                $anyFailed = true;
+            }
+        }
+
+        return [
+            'status' => $anyFailed ? 'failed' : 'ok',
+            'preset' => $preset,
+            'files'  => $files,
+        ];
+    }
+
+    /**
+     * Return $path's realpath iff it resolves inside $root, else null.
+     * Used to prove that an assembled destination cannot escape the
+     * content root via "..", symlinks, or absolute components in a
+     * preset definition. If the path doesn't exist yet (the file we're
+     * about to write doesn't exist), we resolve its parent instead and
+     * re-attach the basename.
+     */
+    private function confineToRoot(string $path, string $root): ?string
+    {
+        $parent = dirname($path);
+        $base   = basename($path);
+        $realParent = realpath($parent);
+        if ($realParent === false) {
+            return null;
+        }
+        $candidate = $realParent . DIRECTORY_SEPARATOR . $base;
+        $rootWithSep = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        if (strncmp($candidate, $rootWithSep, strlen($rootWithSep)) !== 0
+            && $candidate !== $root
+        ) {
+            return null;
+        }
+        return $candidate;
     }
 }

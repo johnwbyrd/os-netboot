@@ -102,20 +102,37 @@ For each script in `src/opnsense/scripts/netboot/` and each action in
 `actions_netboot.conf`, a `*Test.sh` that runs the script against a
 fixture `config.xml` and asserts side-effects:
 
-- `setup.sh` -- after running, `_netboot` user exists, `/var/netboot/`
-  exists with correct mode and ownership, idempotent (run twice, no
-  errors).
-- `bootstrap.sh` -- run with each preset (`netboot_xyz`, `ipxe`, plus
-  an unknown preset to verify rejection), mock `fetch` to a local HTTP
-  server serving canned BIOS/UEFI binaries; verify the right pair lands
-  in the configured content root with the right local filenames and
-  perms. Verify the script self-heals when `_netboot` or the content
-  root are missing (calls `setup.sh` first).
-- `fetch_url.sh` -- pass `..`-containing paths, verify rejection; pass
-  empty URL; pass `ftp://...`; pass legitimate URL; assert each case.
+- `setup.sh` -- after running: `_netboot` user exists; `/var/netboot/`
+  exists with mode `02775`, owner `www`, group `_netboot` (so new files
+  created by the webGUI inherit `_netboot` group via setgid); idempotent
+  (run twice, no errors).
 
 Plus a meta-test that every action declared in `actions_netboot.conf`
 references a script that exists and is executable.
+
+Note: bootstrap and fetch_url are no longer shell scripts -- they are
+implemented in PHP via `OPNsense\Netboot\HttpFetcher` (Layer 3 unit
+tests cover that path), with no configd action in between. The audit
+checklist for the libcurl wrapper is:
+
+- protocols allowlist limited to http/https (no `file://`, `gopher://`,
+  `dict://`, `ldap://`, etc.) -- and the same allowlist on REDIR so a
+  302 can't tunnel out to another scheme
+- TLS peer + host verification asserted explicitly (not just defaulted)
+- redirect follow capped at `MAX_REDIRECTS = 3` hops
+- `UNRESTRICTED_AUTH = false` and `NETRC = ignored` so no credentials
+  leak across redirects
+- per-call `TIMEOUT` and `CONNECTTIMEOUT` to kill hung connections
+- response-size cap via progress callback (abort if `Content-Length`
+  exceeds, or if running total exceeds) -- prevents disk fill
+- atomic write: download to a sibling tempfile, rename on success;
+  partial files never appear at the final path
+
+For user-supplied URLs (`Api/FilesController::fetchUrlAction`) the
+wrapper additionally calls `rejectInternalAddress` to resolve the
+hostname and refuse RFC1918 / loopback / link-local / multicast /
+reserved address space (SSRF protection, parity with Capital One 2019
+class of bug).
 
 Runs in the FreeBSD VM.
 

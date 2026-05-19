@@ -43,12 +43,31 @@ if ! /usr/sbin/pw user show _netboot >/dev/null 2>&1; then
 fi
 
 # Directories with correct ownership/mode.
-#  - Content root: _netboot:_netboot 0755. SFTP chroot target.
-#  - /var/db/netboot: root:wheel 0700. Houses SFTP host keys + authorized_keys.
-#    Must be root-owned and 0700 so sshd's StrictModes accepts it.
+#
+#  - Content root: www:_netboot mode 02775. The webGUI runs as 'www' and
+#    fetches bootstrap binaries and user-supplied URL downloads directly
+#    via PHP curl_exec into this directory -- no shell, no configd, real
+#    HTTP error reporting. For that to work, www must be able to create
+#    files here. setgid (02000) makes new files inherit the _netboot
+#    group so the SFTP/HTTP daemons keep their accustomed group access.
+#    Mode 0775 lets _netboot group members (the daemons) read and lets
+#    www write.
+#
+#    This is strictly less privilege than the previous design: in the
+#    previous design the webGUI talked to configd as root to invoke a
+#    shell script that did the fetch. A compromised www could therefore
+#    invoke any configd action available to www (including arbitrary
+#    URL fetch via [fetch_url] and the bootstrap action). With this
+#    layout the webGUI's reach is constrained to *this* directory and
+#    only via the hardened HttpFetcher class (mvc/app/library/OPNsense/
+#    Netboot/HttpFetcher.php) -- no shell anywhere in the path.
+#
+#  - /var/db/netboot: root:wheel 0700. Houses SFTP host keys +
+#    authorized_keys. Must be root-owned and 0700 so sshd's StrictModes
+#    accepts it.
 #  - /var/etc/netboot: root:wheel 0755. Where the template engine writes
 #    rendered daemon configs.
-#  - /var/log/netboot: _netboot:_netboot 0755. lighttpd error log destination.
+#  - /var/log/netboot: _netboot:_netboot 0755. lighttpd error log dest.
 set_dir() {
     dir="$1"
     owner="$2"
@@ -62,7 +81,7 @@ set_dir() {
     fi
 }
 
-set_dir "${CONTENT_ROOT}"    _netboot _netboot 0755
+set_dir "${CONTENT_ROOT}"    www      _netboot 02775
 set_dir /var/db/netboot      root     wheel    0700
 set_dir /var/etc/netboot     root     wheel    0755
 set_dir /var/log/netboot     _netboot _netboot 0755

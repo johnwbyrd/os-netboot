@@ -3,8 +3,8 @@
 namespace OPNsense\Netboot\Api;
 
 use OPNsense\Base\ApiControllerBase;
-use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
+use OPNsense\Netboot\HttpFetcher;
 use OPNsense\Netboot\PathResolver;
 
 /**
@@ -22,6 +22,14 @@ use OPNsense\Netboot\PathResolver;
  * relative to the configured content root, realpath() the result, and
  * REJECT anything that escapes the root. No '..' shenanigans, no
  * symlink-out, no absolute paths from the client.
+ *
+ * fetch_url is special because the URL is also user-supplied. It goes
+ * through the same audited libcurl wrapper as bootstrap (HttpFetcher),
+ * with enforce_safe_url=true so the wrapper additionally resolves the
+ * hostname and rejects RFC1918, loopback, link-local, multicast, and
+ * reserved address space -- preventing the webGUI user from coercing
+ * the firewall into making HTTP requests at its own management plane
+ * or LAN devices.
  *
  * Error messages: every failure path includes (a) the specific value
  * that was rejected and (b) what was expected. "Path not found" alone
@@ -395,10 +403,36 @@ class FilesController extends ApiControllerBase
             ];
         }
 
-        $backend = new Backend();
-        $relTarget = ltrim(($rel === '' ? '' : $rel . '/') . $name, '/');
-        $output = $backend->configdpRun('netboot fetch_url', [$url, $relTarget]);
-        return ['status' => 'ok', 'output' => $output];
+        // Hardened PHP libcurl fetch. enforce_safe_url=true is required
+        // here because the URL is user-supplied -- without that flag a
+        // webGUI operator could coerce the firewall to make HTTP
+        // requests against its own management plane, internal services,
+        // or other LAN devices they wouldn't otherwise be able to reach
+        // (SSRF). The same audit checklist that gates server-hardcoded
+        // bootstrap URLs (protocols allowlist, TLS verify, redirect cap,
+        // timeouts, size cap) gates this path; the SSRF check is the
+        // only additional restriction here.
+        $destPath = $destDir . DIRECTORY_SEPARATOR . $name;
+        $fetcher = new HttpFetcher();
+        $res = $fetcher->fetch($url, $destPath, ['enforce_safe_url' => true]);
+
+        if (!$res['ok']) {
+            return [
+                'status'    => 'failed',
+                'url'       => $res['url'],
+                'name'      => $name,
+                'http_code' => $res['http_code'],
+                'errno'     => $res['errno'],
+                'message'   => $res['error'],
+            ];
+        }
+        return [
+            'status'    => 'ok',
+            'url'       => $res['url'],
+            'name'      => $name,
+            'bytes'     => $res['bytes'],
+            'http_code' => $res['http_code'],
+        ];
     }
 
     public function downloadAction()
